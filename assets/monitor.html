@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lumino 服务器监控</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f1115; color: #e6e6e6; min-height: 100vh; }
+        .header { padding: 20px 30px; background: #161a22; border-bottom: 1px solid #262c38; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+        .header h1 { font-size: 1.3em; }
+        .header .sub { color: #8a93a6; font-size: 0.9em; }
+        .badge { display: inline-block; padding: 3px 10px; background: #1d4ed8; color: #fff; border-radius: 20px; font-size: 0.8em; }
+        .badge.ok { background: #16a34a; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px 30px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 24px; }
+        .stat-card { background: #161a22; border: 1px solid #262c38; border-radius: 10px; padding: 16px; border-left: 4px solid #3b82f6; }
+        .stat-card.green { border-left-color: #22c55e; }
+        .stat-card.yellow { border-left-color: #eab308; }
+        .stat-card.red { border-left-color: #ef4444; }
+        .stat-card.purple { border-left-color: #a855f7; }
+        .stat-value { font-size: 1.8em; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .stat-label { color: #8a93a6; font-size: 0.85em; margin-top: 4px; }
+        .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
+        .chart-box { background: #161a22; border: 1px solid #262c38; border-radius: 10px; padding: 16px; }
+        .chart-box h3 { font-size: 0.95em; color: #8a93a6; margin-bottom: 10px; }
+        .chart-container { position: relative; height: 200px; }
+        .footer { text-align: center; color: #5a6377; font-size: 0.8em; padding: 20px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>Lumino 服务器监控 <span class="badge ok" id="status">运行中</span></h1>
+            <div class="sub">实时统计 · 1 秒刷新 · 进程内存/CPU 实时采样</div>
+        </div>
+        <div class="sub" id="update-time">--</div>
+    </div>
+
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card"><div class="stat-value" id="conn-current">0</div><div class="stat-label">当前连接</div></div>
+            <div class="stat-card green"><div class="stat-value" id="room-count">0</div><div class="stat-label">活跃房间</div></div>
+            <div class="stat-card yellow"><div class="stat-value" id="user-count">0</div><div class="stat-label">在线用户</div></div>
+            <div class="stat-card red"><div class="stat-value" id="msg-rate">0</div><div class="stat-label">消息速率 (msg/s)</div></div>
+            <div class="stat-card purple"><div class="stat-value" id="note-rate">0</div><div class="stat-label">音符操作 (op/s)</div></div>
+            <div class="stat-card"><div class="stat-value" id="rss">0</div><div class="stat-label">内存 RSS (MB)</div></div>
+            <div class="stat-card"><div class="stat-value" id="cpu">0%</div><div class="stat-label">CPU 占用</div></div>
+        </div>
+
+        <div class="charts">
+            <div class="chart-box"><h3>连接 / 房间 / 用户趋势</h3><div class="chart-container"><canvas id="connChart"></canvas></div></div>
+            <div class="chart-box"><h3>消息 / 音符操作速率 (msg/s)</h3><div class="chart-container"><canvas id="rateChart"></canvas></div></div>
+            <div class="chart-box"><h3>内存 RSS (MB)</h3><div class="chart-container"><canvas id="memChart"></canvas></div></div>
+            <div class="chart-box"><h3>CPU 占用 (%)</h3><div class="chart-container"><canvas id="cpuChart"></canvas></div></div>
+        </div>
+    </div>
+    <div class="footer">lumino-server-rs · Rust 重写版 · 低内存低 CPU 设计</div>
+
+    <script>
+        const MAX = 120;
+        const history = { labels: [], conn: [], rooms: [], users: [], msgIn: [], msgOut: [], noteOps: [], mem: [], cpu: [] };
+
+        function mkChart(ctx, color, label, secondColor, secondLabel) {
+            const ds = [{ label, data: [], borderColor: color, backgroundColor: color + '22', borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0 }];
+            if (secondColor) ds.push({ label: secondLabel, data: [], borderColor: secondColor, backgroundColor: secondColor + '22', borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0 });
+            return new Chart(ctx, {
+                type: 'line',
+                data: { labels: history.labels, datasets: ds },
+                options: { responsive: true, maintainAspectRatio: false, animation: false,
+                    plugins: { legend: { labels: { color: '#8a93a6', boxWidth: 12 } } },
+                    scales: { x: { ticks: { color: '#5a6377', maxTicksLimit: 8 } }, y: { beginAtZero: true, ticks: { color: '#5a6377' } } } }
+            });
+        }
+
+        const connChart = mkChart(document.getElementById('connChart').getContext('2d'), '#3b82f6', '连接', '#22c55e', '房间');
+        const rateChart = mkChart(document.getElementById('rateChart').getContext('2d'), '#ef4444', '消息进 (msg/s)', '#eab308', '音符操作 (op/s)');
+        const memChart = mkChart(document.getElementById('memChart').getContext('2d'), '#a855f7', '内存 (MB)');
+        const cpuChart = mkChart(document.getElementById('cpuChart').getContext('2d'), '#f97316', 'CPU (%)');
+
+        function fmt(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : Math.round(n).toString(); }
+
+        async function tick() {
+            try {
+                const res = await fetch('/metrics');
+                if (!res.ok) throw new Error(res.status);
+                const d = await res.json();
+                document.getElementById('status').textContent = '运行中';
+                document.getElementById('update-time').textContent = '更新时间: ' + new Date().toLocaleTimeString() + ' · 运行 ' + d.uptime_sec + 's';
+                document.getElementById('conn-current').textContent = d.connections.current;
+                document.getElementById('room-count').textContent = d.rooms;
+                document.getElementById('user-count').textContent = d.users;
+                document.getElementById('msg-rate').textContent = fmt(d.rates.msgs_in);
+                document.getElementById('note-rate').textContent = fmt(d.rates.note_ops);
+                document.getElementById('rss').textContent = d.resources.rss_mb.toFixed(1);
+                document.getElementById('cpu').textContent = d.resources.cpu_pct.toFixed(1) + '%';
+
+                const now = new Date().toLocaleTimeString();
+                history.labels.push(now);
+                history.conn.push(d.connections.current);
+                history.rooms.push(d.rooms);
+                history.users.push(d.users);
+                history.msgIn.push(Math.round(d.rates.msgs_in));
+                history.noteOps.push(Math.round(d.rates.note_ops));
+                history.mem.push(d.resources.rss_mb);
+                history.cpu.push(d.resources.cpu_pct);
+                if (history.labels.length > MAX) {
+                    ['labels','conn','rooms','users','msgIn','noteOps','mem','cpu'].forEach(k => history[k].shift());
+                }
+                connChart.update();
+                rateChart.update();
+                memChart.update();
+                cpuChart.update();
+            } catch (e) {
+                document.getElementById('status').textContent = '连接失败';
+                document.getElementById('status').className = 'badge';
+            }
+        }
+        tick();
+        setInterval(tick, 1000);
+    </script>
+</body>
+</html>
