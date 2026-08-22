@@ -23,8 +23,9 @@ use serde_json::Value;
 #[serde(tag = "type")]
 #[serde(rename_all = "camelCase")]
 pub enum ClientMessage {
-    /// 认证：携带用户名；若连接 URL 带 ?roomId= 则自动加入房间
-    Auth { username: String },
+    /// 认证：携带用户名与密码；仅已注册账户（凭据校验通过）方可连接，
+    /// 否则连接被拒绝（无法进入任何房间）。
+    Auth { username: String, password: String },
     /// 创建房间
     CreateRoom { name: String },
     /// 通过邀请码加入房间（注意：enum 的 rename_all 不作用于字段，
@@ -60,9 +61,9 @@ mod tests {
     #[test]
     fn parse_client_auth() {
         let msg: ClientMessage =
-            serde_json::from_str(r#"{"type":"auth","username":"小明"}"#).unwrap();
+            serde_json::from_str(r#"{"type":"auth","username":"小明","password":"secret"}"#).unwrap();
         match msg {
-            ClientMessage::Auth { username } => assert_eq!(username, "小明"),
+            ClientMessage::Auth { username, .. } => assert_eq!(username, "小明"),
             _ => panic!("wrong variant"),
         }
     }

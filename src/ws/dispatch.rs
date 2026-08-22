@@ -39,8 +39,16 @@ pub(crate) fn dispatch(
     };
 
     match msg {
-        ClientMessage::Auth { username } => {
-            handle_auth(state, user, socket_id, pending_room, reply_tx, &username)
+        ClientMessage::Auth { username, password } => {
+            handle_auth(
+                state,
+                user,
+                socket_id,
+                pending_room,
+                reply_tx,
+                &username,
+                &password,
+            )
         }
         ClientMessage::CreateRoom { name } => {
             let Some(u) = user.as_ref() else { return };
@@ -199,6 +207,7 @@ pub(crate) fn handle_auth(
     pending_room: &Option<String>,
     reply_tx: &mpsc::Sender<Arc<str>>,
     username: &str,
+    password: &str,
 ) {
     let metrics = &state.metrics;
     let username = match validate_username(username) {
@@ -208,6 +217,23 @@ pub(crate) fn handle_auth(
             return;
         }
     };
+
+    // 账号校验：仅允许已注册账户（用户名 + 密码）连接。
+    // 凭据错误直接拒绝，绝不创建 User —— 未授权连接既不能进入房间，
+    // 也无法收发任何业务消息。
+    if crate::auth::auth_store()
+        .verify_login(&username, password)
+        .is_none()
+    {
+        send_raw(
+            reply_tx,
+            &ServerMessage::Error {
+                error: "用户名或密码错误，未授权连接".into(),
+            },
+            metrics,
+        );
+        return;
+    }
 
     let new_user = state.create_user(socket_id, username.clone(), reply_tx.clone());
     tracing::debug!("[auth] 用户已创建: {username}");

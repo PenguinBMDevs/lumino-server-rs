@@ -2,6 +2,64 @@ use super::*;
 use crate::state::MAX_USERS_PER_ROOM;
 use serde_json::Value;
 
+/// 测试辅助：初始化认证模块并为给定用户名注册强密码账户。
+/// `crate::auth::init()` 为幂等（全局 OnceLock），重复调用安全。
+fn ensure_accounts(names: &[&str]) {
+    let _ = crate::auth::init();
+    let store = crate::auth::auth_store();
+    for n in names {
+        let _ = store.register(n, "CollabTest1234!");
+    }
+}
+
+/// 注册账户 + 正确密码 → 认证通过并创建用户
+#[test]
+fn dispatch_auth_requires_registered_account() {
+    let state = AppState::new();
+    ensure_accounts(&["alice"]);
+    let (tx, mut rx) = mpsc::channel::<Arc<str>>(16);
+    let mut user = None;
+
+    // 未注册用户 → 拒绝
+    dispatch(
+        &state,
+        &mut user,
+        1,
+        &None,
+        &tx,
+        r#"{"type":"auth","username":"ghost","password":"whatever"}"#,
+    );
+    let v: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+    assert_eq!(v["type"], "error");
+    assert!(user.is_none(), "未授权连接不应创建用户");
+
+    // 注册用户但密码错误 → 拒绝
+    dispatch(
+        &state,
+        &mut user,
+        2,
+        &None,
+        &tx,
+        r#"{"type":"auth","username":"alice","password":"WrongPass999!"}"#,
+    );
+    let v: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+    assert_eq!(v["type"], "error");
+    assert!(user.is_none(), "密码错误不应创建用户");
+
+    // 正确凭据 → 通过
+    dispatch(
+        &state,
+        &mut user,
+        3,
+        &None,
+        &tx,
+        r#"{"type":"auth","username":"alice","password":"CollabTest1234!"}"#,
+    );
+    let v: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+    assert_eq!(v["type"], "authenticated");
+    assert!(user.is_some());
+}
+
 #[test]
 fn dispatch_unknown_message_type() {
     // 未知 type → 无效的消息格式（不应 panic）
@@ -33,13 +91,14 @@ fn dispatch_auth_then_note_batch() {
     let mut user = None;
 
     // 认证
+    ensure_accounts(&["tester", "user2"]);
     dispatch(
         &state,
         &mut user,
         1,
         &None,
         &tx,
-        r#"{"type":"auth","username":"测试"}"#,
+        r#"{"type":"auth","username":"tester","password":"CollabTest1234!"}"#,
     );
     let msg = rx.try_recv().unwrap();
     let v: Value = serde_json::from_str(&msg).unwrap();
@@ -69,7 +128,7 @@ fn dispatch_auth_then_note_batch() {
         2,
         &None,
         &tx2,
-        r#"{"type":"auth","username":"用户2"}"#,
+        r#"{"type":"auth","username":"user2","password":"CollabTest1234!"}"#,
     );
     rx2.try_recv().unwrap(); // authenticated
 
@@ -107,13 +166,14 @@ fn dispatch_full_sync() {
     let state = AppState::new();
     let (tx, mut rx) = mpsc::channel::<Arc<str>>(64);
     let mut user = None;
+    ensure_accounts(&["alfa"]);
     dispatch(
         &state,
         &mut user,
         1,
         &None,
         &tx,
-        r#"{"type":"auth","username":"A"}"#,
+        r#"{"type":"auth","username":"alfa","password":"CollabTest1234!"}"#,
     );
     rx.try_recv().unwrap();
     dispatch(
@@ -158,13 +218,17 @@ fn dispatch_room_full() {
     {
         let (tx, mut rx) = mpsc::channel::<Arc<str>>(64);
         let mut u = None;
+        ensure_accounts(&[
+            "host", "user2", "user3", "user4", "user5", "user6", "user7", "user8", "user9",
+            "user10", "user11",
+        ]);
         dispatch(
             &state,
             &mut u,
             1,
             &None,
             &tx,
-            r#"{"type":"auth","username":"h"}"#,
+            r#"{"type":"auth","username":"host","password":"CollabTest1234!"}"#,
         );
         rx.try_recv().unwrap();
         dispatch(
@@ -189,7 +253,7 @@ fn dispatch_room_full() {
             i as u64,
             &None,
             &tx,
-            &format!(r#"{{"type":"auth","username":"u{i}"}}"#),
+            &format!(r#"{{"type":"auth","username":"user{i}","password":"CollabTest1234!"}}"#),
         );
         rx.try_recv().unwrap();
         dispatch(
