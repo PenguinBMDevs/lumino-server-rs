@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use axum::extract::{Path, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -73,6 +73,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/health", get(health))
         .route("/info", get(info))
         .route("/metrics", get(metrics_json))
+        // ── 认证相关 ──
+        .route("/login", get(login_html))
+        .route("/change-password", get(change_password_html))
+        .route("/logout", get(logout))
+        .route("/api/auth/login", post(login_api))
+        .route("/api/auth/change-password", post(change_password_api))
+        .route("/api/auth/me", get(auth_me))
+        // ── 受保护的管理面板（需登录）──
         .route("/monitor", get(monitor_html))
         .route("/logs", get(logs_html))
         .route("/api/room/create", post(create_room_api))
@@ -178,8 +186,14 @@ fn num_cpus() -> usize {
     })
 }
 
-/// GET /monitor
-async fn monitor_html() -> impl IntoResponse {
+/// GET /monitor —— 受保护，未登录跳转 /login
+async fn monitor_html(headers: HeaderMap) -> impl IntoResponse {
+    if crate::auth::auth_store()
+        .session_from_headers(&headers, "full")
+        .is_none()
+    {
+        return redirect("/login").into_response();
+    }
     (
         cors_headers(),
         [
@@ -188,10 +202,17 @@ async fn monitor_html() -> impl IntoResponse {
         ],
         include_str!("../assets/monitor.html"),
     )
+        .into_response()
 }
 
-/// GET /logs
-async fn logs_html() -> impl IntoResponse {
+/// GET /logs —— 受保护，未登录跳转 /login
+async fn logs_html(headers: HeaderMap) -> impl IntoResponse {
+    if crate::auth::auth_store()
+        .session_from_headers(&headers, "full")
+        .is_none()
+    {
+        return redirect("/login").into_response();
+    }
     (
         cors_headers(),
         [
@@ -200,6 +221,7 @@ async fn logs_html() -> impl IntoResponse {
         ],
         include_str!("../assets/logs.html"),
     )
+        .into_response()
 }
 
 /// POST /api/room/create — 预创建房间（HTTP 通道，供网页/客户端拿 WebSocket URL）
@@ -282,4 +304,223 @@ async fn room_info_api(
             Json(json!({ "error": "Room not found" })),
         ),
     }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 认证相关端点
+// ───────────────────────────────────────────────────────────────────────────
+
+/// GET /login —— 登录页
+async fn login_html() -> impl IntoResponse {
+    (
+        cors_headers(),
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        include_str!("../assets/login.html"),
+    )
+}
+
+/// GET /change-password —— 强制改密页
+async fn change_password_html() -> impl IntoResponse {
+    (
+        cors_headers(),
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        include_str!("../assets/change-password.html"),
+    )
+}
+
+/// GET /logout —— 清除会话并跳转登录页
+async fn logout(headers: HeaderMap) -> impl IntoResponse {
+    let secure = is_secure(&headers);
+    let cookie = format!(
+        "lumino_sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0{}",
+        if secure { "; Secure" } else { "" }
+    );
+    let mut h = HeaderMap::new();
+    h.insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+    let (status, mut rh) = redirect("/login");
+    h.extend(rh.drain());
+    (status, h)
+}
+
+/// GET /api/auth/me —— 返回当前登录态（前端据此决定跳转）
+async fn auth_me(headers: HeaderMap) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    if let Some(c) = store.session_from_headers(&headers, "full") {
+        return (
+            cors_headers(),
+            Json(json!({ "authenticated": true, "scope": c.scope, "username": c.sub })),
+        );
+    }
+    if let Some(c) = store.session_from_headers(&headers, "pwchange") {
+        return (
+            cors_headers(),
+            Json(json!({
+                "authenticated": true,
+                "scope": c.scope,
+                "requires_change": true,
+                "username": c.sub
+            })),
+        );
+    }
+    (cors_headers(), Json(json!({ "authenticated": false })))
+}
+
+/// POST /api/auth/login —— 校验密码并签发会话
+async fn login_api(headers: HeaderMap, Json(payload): Json<Value>) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    let key = client_key(&headers);
+
+    // 暴力破解锁定检查
+    let remaining = store.lock_remaining(&key);
+    if remaining > 0 {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            cors_headers(),
+            Json(json!({
+                "success": false,
+                "error": format!("尝试次数过多，请 {remaining} 秒后再试"),
+                "lock_seconds": remaining
+            })),
+        );
+    }
+
+    let password = payload
+        .get("password")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    if !store.verify_password(&password) {
+        store.record_fail(&key);
+        let rem = store.lock_remaining(&key);
+        return (
+            StatusCode::UNAUTHORIZED,
+            cors_headers(),
+            Json(json!({
+                "success": false,
+                "error": "用户名或密码错误",
+                "lock_seconds": rem
+            })),
+        );
+    }
+
+    store.record_ok(&key);
+    let requires = store.requires_change();
+    let scope = if requires { "pwchange" } else { "full" };
+    let token = store.sign_session(scope);
+    let max_age = if requires { 900 } else { 43_200 };
+
+    let mut h = cors_headers();
+    h.insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&session_cookie(&token, max_age, is_secure(&headers))).unwrap(),
+    );
+    (
+        StatusCode::OK,
+        h,
+        Json(json!({ "success": true, "requires_change": requires })),
+    )
+}
+
+/// POST /api/auth/change-password —— 校验当前密码 + 强度策略后更新
+async fn change_password_api(headers: HeaderMap, Json(payload): Json<Value>) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    let key = client_key(&headers);
+
+    // 必须持有有效的"仅改密"会话
+    if store.session_from_headers(&headers, "pwchange").is_none() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            cors_headers(),
+            Json(json!({ "success": false, "error": "会话已过期，请重新登录" })),
+        );
+    }
+
+    let current = payload
+        .get("current_password")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let new = payload
+        .get("new_password")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    // 再次校验当前密码（纵深防御：即便拿到改密令牌也需知道原密码）
+    if !store.verify_password(&current) {
+        store.record_fail(&key);
+        return (
+            StatusCode::UNAUTHORIZED,
+            cors_headers(),
+            Json(json!({ "success": false, "error": "当前密码错误" })),
+        );
+    }
+
+    match store.change_password(&current, &new) {
+        Ok(()) => {
+            store.record_ok(&key);
+            // 改密成功后签发完整会话
+            let token = store.sign_session("full");
+            let mut h = cors_headers();
+            h.insert(
+                header::SET_COOKIE,
+                HeaderValue::from_str(&session_cookie(&token, 43_200, is_secure(&headers))).unwrap(),
+            );
+            (StatusCode::OK, h, Json(json!({ "success": true })))
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            cors_headers(),
+            Json(json!({ "success": false, "error": e })),
+        ),
+    }
+}
+
+// ── 工具函数 ──
+
+/// 构造会话 Cookie 字符串
+fn session_cookie(value: &str, max_age_secs: i64, secure: bool) -> String {
+    let mut c = format!(
+        "lumino_sid={value}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age_secs}"
+    );
+    if secure {
+        c.push_str("; Secure");
+    }
+    c
+}
+
+/// 302 跳转到指定路径
+fn redirect(to: &str) -> (StatusCode, HeaderMap) {
+    let mut h = HeaderMap::new();
+    h.insert(
+        header::LOCATION,
+        HeaderValue::from_str(to).unwrap_or_else(|_| HeaderValue::from_static("/login")),
+    );
+    (StatusCode::FOUND, h)
+}
+
+/// 客户端标识（用于暴力破解锁定）：优先 X-Forwarded-For，否则 "direct"
+fn client_key(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "direct".to_string())
+}
+
+/// 是否处于安全传输（HTTPS）：通过 X-Forwarded-Proto 或 Host 推断
+fn is_secure(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|p| p.eq_ignore_ascii_case("https"))
+        .unwrap_or(false)
 }

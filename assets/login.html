@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lumino 安全控制台 · 登录</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      .grid-bg {
+        background-image:
+          linear-gradient(rgba(99, 102, 241, 0.06) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(99, 102, 241, 0.06) 1px, transparent 1px);
+        background-size: 38px 38px;
+      }
+      .glow {
+        box-shadow: 0 0 60px -12px rgba(99, 102, 241, 0.55);
+      }
+      @keyframes float {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-8px); }
+      }
+      .float { animation: float 6s ease-in-out infinite; }
+    </style>
+  </head>
+  <body class="min-h-screen bg-slate-950 text-slate-200 grid-bg flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-gradient-to-br from-indigo-950/40 via-slate-950 to-slate-900/60 pointer-events-none"></div>
+
+    <main class="relative w-full max-w-md">
+      <!-- 品牌 / 盾牌 -->
+      <div class="flex flex-col items-center mb-6">
+        <div class="float w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 grid place-items-center glow">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-9 h-9 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            <path d="m9 12 2 2 4-4"></path>
+          </svg>
+        </div>
+        <h1 class="mt-4 text-2xl font-semibold tracking-tight text-white">Lumino 安全控制台</h1>
+        <p class="text-sm text-slate-400">多人协作服务器 · 管理员鉴权</p>
+      </div>
+
+      <!-- 登录卡片 -->
+      <form id="login-form" class="relative rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl p-7 glow">
+        <div class="flex items-center gap-2 mb-5 text-xs font-medium text-emerald-400">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          端到端加密通道已启用
+        </div>
+
+        <label for="password" class="block text-sm font-medium text-slate-300 mb-2">管理员密码</label>
+        <div class="relative">
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+            placeholder="请输入密码"
+            class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 pr-12 text-white placeholder-slate-500 outline-none focus:ring-2 focus:ring-indigo-500/60 focus:border-indigo-500/50 transition"
+          />
+          <button type="button" id="toggle" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200" aria-label="显示密码">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+
+        <div id="error" class="hidden mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2"></div>
+
+        <button
+          id="submit"
+          type="submit"
+          class="mt-6 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-400 hover:to-violet-500 text-white font-semibold py-3 transition disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+        >
+          <span id="label">登 录</span>
+          <svg id="spinner" class="hidden w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z"></path>
+          </svg>
+        </button>
+
+        <p class="mt-4 text-center text-xs text-slate-500">
+          受 Argon2id + AES-256-GCM 保护 · 连续失败将临时锁定
+        </p>
+      </form>
+
+      <p class="mt-6 text-center text-xs text-slate-600">
+        默认管理员密码 <code class="text-slate-400">admin</code> · 首次登录需强制修改
+      </p>
+    </main>
+
+    <script>
+      const form = document.getElementById("login-form");
+      const pw = document.getElementById("password");
+      const errBox = document.getElementById("error");
+      const submit = document.getElementById("submit");
+      const label = document.getElementById("label");
+      const spinner = document.getElementById("spinner");
+      const toggle = document.getElementById("toggle");
+
+      toggle.addEventListener("click", () => {
+        const t = pw.type === "password" ? "text" : "password";
+        pw.type = t;
+      });
+
+      function showError(msg) {
+        errBox.textContent = msg;
+        errBox.classList.remove("hidden");
+      }
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        errBox.classList.add("hidden");
+        label.textContent = "验证中";
+        spinner.classList.remove("hidden");
+        submit.disabled = true;
+
+        try {
+          const res = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: pw.value }),
+          });
+          const data = await res.json();
+          if (res.ok && data.success) {
+            window.location.href = data.requires_change ? "/change-password" : "/monitor";
+          } else {
+            showError(data.error || "登录失败");
+            if (data.lock_seconds) {
+              startLock(data.lock_seconds);
+            }
+          }
+        } catch (e) {
+          showError("网络错误，请稍后重试");
+        } finally {
+          if (!submit.disabled) {
+            label.textContent = "登 录";
+            spinner.classList.add("hidden");
+          }
+        }
+      });
+
+      let lockTimer = null;
+      function startLock(sec) {
+        label.textContent = `锁定中 (${sec}s)`;
+        spinner.classList.add("hidden");
+        submit.disabled = true;
+        clearInterval(lockTimer);
+        lockTimer = setInterval(() => {
+          sec -= 1;
+          if (sec <= 0) {
+            clearInterval(lockTimer);
+            label.textContent = "登 录";
+            submit.disabled = false;
+          } else {
+            label.textContent = `锁定中 (${sec}s)`;
+          }
+        }, 1000);
+      }
+    </script>
+  </body>
+</html>

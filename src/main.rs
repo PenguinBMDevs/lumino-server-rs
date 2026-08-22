@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use lumino_server_rs::auth;
 use lumino_server_rs::http;
 use lumino_server_rs::log;
 use lumino_server_rs::state::AppState;
@@ -84,6 +85,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn async_main(config: Config, workers: usize) -> Result<(), Box<dyn std::error::Error>> {
+    // 初始化认证模块（生成/加载主密钥与凭据，缺失则用默认密码 admin 初始化）
+    auth::init().map_err(|e| {
+        eprintln!("认证模块初始化失败: {e}");
+        e
+    })?;
+
     let state = AppState::new();
     let app = http::router(Arc::clone(&state));
 

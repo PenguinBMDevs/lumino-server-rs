@@ -36,6 +36,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 futures-util = "0.3"
 tokio-tungstenite = "0.24"
+# ── 安全 / 密码存储 ──
+argon2 = "0.5"          # Argon2id 内存硬密码哈希（OWASP 推荐）
+aes-gcm = "0.10"        # AES-256-GCM 配置文件静态加密（防落盘泄露）
+rand = "0.8"            # 真随机盐 / 随机数 / 主密钥
+hmac = "0.12"           # 会话令牌 HMAC-SHA256 签名（抗篡改）
+sha2 = "0.10"           # HMAC 底层哈希
+base64 = "0.22"         # 令牌 / 主密钥编码
 
 [profile.release]
 opt-level = 3
