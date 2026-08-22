@@ -129,6 +129,10 @@ pub struct Room {
     pub users: RwLock<HashMap<String, Arc<User>>>,
     pub project: RwLock<ProjectState>,
     pub max_users: usize,
+    /// 房主上传的工程名（None 表示尚未上传）
+    pub project_name: RwLock<Option<String>>,
+    /// 房主工程文件的内容哈希（None 表示尚未上传）
+    pub project_hash: RwLock<Option<String>>,
 }
 
 impl Room {
@@ -140,6 +144,8 @@ impl Room {
             users: RwLock::new(HashMap::new()),
             project: RwLock::new(ProjectState::new()),
             max_users: MAX_USERS_PER_ROOM,
+            project_name: RwLock::new(None),
+            project_hash: RwLock::new(None),
         });
         if let Some(host) = host {
             room.add_user(host);
@@ -185,6 +191,12 @@ impl Room {
     }
 
     pub fn info(&self) -> RoomInfo {
+        let meta = |lock: &RwLock<Option<String>>| {
+            lock.read()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .unwrap_or_default()
+        };
         RoomInfo {
             id: self.id.clone(),
             invite_code: self.id.clone(),
@@ -197,6 +209,20 @@ impl Room {
                 .unwrap_or_default(),
             user_count: self.user_count(),
             max_users: self.max_users,
+            project_name: meta(&self.project_name),
+            project_hash: meta(&self.project_hash),
         }
+    }
+
+    /// 记录房主上传的工程名与内容哈希（供加入者判断“是否同一份工程”）
+    pub fn set_project_meta(&self, name: Option<String>, hash: Option<String>) {
+        *self
+            .project_name
+            .write()
+            .unwrap_or_else(|p| p.into_inner()) = name;
+        *self
+            .project_hash
+            .write()
+            .unwrap_or_else(|p| p.into_inner()) = hash;
     }
 }

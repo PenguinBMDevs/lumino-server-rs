@@ -13,7 +13,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::body::Bytes;
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
@@ -104,6 +105,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/room/{code}/info", get(room_info_api))
         .route("/api/room/{code}/delete", post(delete_room_api))
         .route("/api/room/{code}/kick", post(kick_user_api))
+        .route("/api/room/{code}/project", post(upload_room_project_api).get(download_room_project_api))
         .route("/api/rooms", get(rooms_api))
         .with_state(state)
 }
@@ -368,6 +370,8 @@ async fn room_info_api(
                     "hostId": info.host_id,
                     "userCount": info.user_count,
                     "maxUsers": info.max_users,
+                    "projectName": info.project_name,
+                    "projectHash": info.project_hash,
                 })),
             )
         }
@@ -427,6 +431,83 @@ async fn kick_user_api(
             cors_headers(),
             Json(json!({ "error": e })),
         ),
+    }
+}
+
+/// 房主上传工程文件时的查询参数（工程名 + 内容哈希，供加入者判断“是否同一份工程”）
+#[derive(serde::Deserialize)]
+struct RoomProjectQuery {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    hash: Option<String>,
+}
+
+/// POST /api/room/{code}/project — 房主异步上传当前工程单文件 lmpj（二进制）
+///
+/// 落盘到程序目录 `user-data/rooms/<code>.lmpj`，并记录工程名/哈希到房间元数据。
+async fn upload_room_project_api(
+    State(state): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    Query(params): Query<RoomProjectQuery>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let Some(room) = state.room_by_code(&code) else {
+        return (
+            StatusCode::NOT_FOUND,
+            cors_headers(),
+            Json(json!({ "error": "Room not found" })),
+        )
+            .into_response();
+    };
+    let dir = crate::state::room_projects_dir();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            cors_headers(),
+            Json(json!({ "error": format!("创建目录失败: {e}") })),
+        )
+            .into_response();
+    }
+    let path = crate::state::room_project_file_path(&code);
+    if let Err(e) = std::fs::write(&path, &body[..]) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            cors_headers(),
+            Json(json!({ "error": format!("写入工程文件失败: {e}") })),
+        )
+            .into_response();
+    }
+    room.set_project_meta(params.name, params.hash);
+    (
+        StatusCode::OK,
+        cors_headers(),
+        Json(json!({ "success": true, "size": body.len() })),
+    )
+        .into_response()
+}
+
+/// GET /api/room/{code}/project — 加入者下载房主上传的工程文件
+async fn download_room_project_api(
+    State(state): State<Arc<AppState>>,
+    Path(code): Path<String>,
+) -> impl IntoResponse {
+    let path = crate::state::room_project_file_path(&code);
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let mut headers = cors_headers();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/octet-stream"),
+            );
+            (StatusCode::OK, headers, bytes).into_response()
+        }
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            cors_headers(),
+            Json(json!({ "error": "该房间尚未上传工程文件" })),
+        )
+            .into_response(),
     }
 }
 
@@ -1054,4 +1135,58 @@ fn is_secure(headers: &HeaderMap) -> bool {
         .and_then(|v| v.to_str().ok())
         .map(|p| p.eq_ignore_ascii_case("https"))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::{Path, State};
+
+    #[tokio::test]
+    async fn upload_then_download_then_delete_room_project() {
+        let state = AppState::new();
+        let room = state.create_room_api("工程测试".into());
+        let code = room.id.clone();
+
+        // 上传工程文件
+        let resp = upload_room_project_api(
+            State(Arc::clone(&state)),
+            Path(code.clone()),
+            Query(RoomProjectQuery {
+                name: Some("我的工程".into()),
+                hash: Some("abc123".into()),
+            }),
+            Bytes::from_static(b"LMPJ-fake-bytes"),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 房间元数据已记录工程名/哈希
+        let info = room.info();
+        assert_eq!(info.project_name, "我的工程");
+        assert_eq!(info.project_hash, "abc123");
+        assert!(crate::state::room_project_file_path(&code).exists());
+
+        // 下载工程文件
+        let resp2 = download_room_project_api(State(Arc::clone(&state)), Path(code.clone()))
+            .await
+            .into_response();
+        assert_eq!(resp2.status(), StatusCode::OK);
+
+        // 房间删除 → 工程文件立即删除
+        state.delete_room(&code).unwrap();
+        assert!(!crate::state::room_project_file_path(&code).exists());
+    }
+
+    #[tokio::test]
+    async fn download_missing_room_project_returns_404() {
+        let state = AppState::new();
+        let room = state.create_room_api("空房间".into());
+        let code = room.id.clone();
+        let resp = download_room_project_api(State(Arc::clone(&state)), Path(code.clone()))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
 }

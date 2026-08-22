@@ -9,6 +9,7 @@
 pub mod room;
 pub mod user;
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -83,6 +84,7 @@ impl AppState {
             if let Some(room) = room {
                 room.remove_user(&user.id);
                 if room.user_count() == 0 {
+                    delete_room_project_file(&rid);
                     self.rooms.remove(&rid);
                     self.metrics.rooms_current.fetch_sub(1, Ordering::Relaxed);
                 }
@@ -190,6 +192,7 @@ impl AppState {
 
         let remaining = room.user_count();
         if remaining == 0 {
+            delete_room_project_file(&rid);
             self.rooms.remove(&rid);
             self.metrics.rooms_current.fetch_sub(1, Ordering::Relaxed);
         } else {
@@ -236,6 +239,7 @@ impl AppState {
             .write()
             .unwrap_or_else(|p| p.into_inner())
             .clear();
+        delete_room_project_file(code);
         self.rooms.remove(code);
         self.metrics.rooms_current.fetch_sub(1, Ordering::Relaxed);
         Ok(())
@@ -300,6 +304,7 @@ impl AppState {
             .map(|e| e.key().clone())
             .collect();
         for id in expired {
+            delete_room_project_file(&id);
             if self.rooms.remove(&id).is_some() {
                 self.metrics.rooms_current.fetch_sub(1, Ordering::Relaxed);
                 cleaned += 1;
@@ -311,6 +316,39 @@ impl AppState {
     /// 统计信息
     pub fn stats(&self) -> (i64, i64) {
         (self.rooms.len() as i64, self.users.len() as i64)
+    }
+}
+
+// ── 房间工程文件存储（程序目录下的 user-data/rooms/<code>.lmpj）──
+//
+// 用户选择“服务端程序目录/user-data/rooms”作为工程文件落盘位置：
+// 优先取可执行文件所在目录，回退到当前工作目录。每个房间一份，
+// 房间被删除/清空时立即删除（见各 rooms.remove 调用点）。
+
+/// 程序目录下的 user-data 目录（可执行文件父目录回退到当前目录）
+pub fn program_data_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+        .join("user-data")
+}
+
+/// 所有房间工程文件目录
+pub fn room_projects_dir() -> PathBuf {
+    program_data_dir().join("rooms")
+}
+
+/// 单个房间工程文件路径：<room_projects_dir>/<code>.lmpj
+pub fn room_project_file_path(code: &str) -> PathBuf {
+    room_projects_dir().join(format!("{code}.lmpj"))
+}
+
+/// 删除某房间上传的工程文件（房间被删除/清空时调用；文件不存在则忽略）
+pub fn delete_room_project_file(code: &str) {
+    let path = room_project_file_path(code);
+    if path.exists() {
+        let _ = std::fs::remove_file(&path);
     }
 }
 

@@ -52,6 +52,9 @@ pub enum ClientMessage {
     Ping { timestamp: u64 },
     /// 订阅实时日志（浏览器 /logs 面板专用；Rust 客户端不使用）
     SubscribeLogs,
+    /// 框选状态同步（selection 为不透明 JSON 载荷，避免协议漂移）
+    /// 载荷结构：`{ active: bool, userId: str, timestamp: u64, fingerprints: [[track,tick,key,length], ...] }`
+    Selection { selection: Value },
 }
 
 #[cfg(test)]

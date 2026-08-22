@@ -18,6 +18,10 @@ pub struct RoomInfo {
     pub host_id: String,
     pub user_count: usize,
     pub max_users: usize,
+    /// 房主已上传的工程名（空字符串表示尚未上传）
+    pub project_name: String,
+    /// 房主工程文件的内容哈希（空字符串表示尚未上传）
+    pub project_hash: String,
 }
 
 /// 用户信息（与客户端 `UserInfo` 一致）
@@ -159,6 +163,12 @@ pub enum ServerMessage<'a> {
     },
     /// 通用错误
     Error { error: &'a str },
+    /// 框选状态同步（向房间内其他成员广播；发送方可忽略自身 userId）
+    Selection {
+        #[serde(rename = "userId")]
+        user_id: &'a str,
+        selection: &'a Value,
+    },
     /// 实时日志（仅日志订阅客户端接收）
     Log {
         timestamp: &'a str,

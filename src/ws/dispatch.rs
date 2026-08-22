@@ -185,6 +185,17 @@ pub(crate) fn dispatch(
             };
             send_raw(reply_tx, &msg, metrics);
         }
+        ClientMessage::Selection { selection } => {
+            let Some(u) = user.as_ref() else { return };
+            let Some(room) = state.room_of(u) else { return };
+            u.touch();
+            let msg = ServerMessage::Selection {
+                user_id: &u.id,
+                selection: &selection,
+            };
+            // 广播给房间内其他成员（发送方已本地持有选择，无需回发）
+            broadcast_to_room(&room, &msg, Some(&u.id), metrics);
+        }
         ClientMessage::SubscribeLogs => {
             crate::log::LOG.subscribe(socket_id, reply_tx.clone());
             let history = crate::log::LOG.history(100);
