@@ -4,13 +4,14 @@
 //! - `GET /health`     健康检查 + 统计摘要
 //! - `GET /info`       服务器信息
 //! - `GET /metrics`    指标 JSON（含进程 RSS / CPU%，供监控面板轮询）
-//! - `GET /monitor`    监控面板（HTML，Chart.js）
+//! - `GET /monitor`    监控面板（HTML，自绘 sparkline，无外部 CDN）
 //! - `GET /logs`       日志面板（HTML，WebSocket 订阅实时日志）
 //! - `POST /api/room/create`   预创建房间（返回 WebSocket URL）
 //! - `GET /api/room/{code}/info`  房间信息
 
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -78,9 +79,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/login", get(login_html))
         .route("/dashboard", get(dashboard_html))
         .route("/change-password", get(change_password_html))
+        .route("/register", get(register_html))
         .route("/logout", get(logout))
         .route("/api/auth/login", post(login_api))
         .route("/api/auth/change-password", post(change_password_api))
+        .route("/api/auth/change-username", post(change_username_api))
+        .route("/api/auth/register", post(register_api))
         .route("/api/auth/me", get(auth_me))
         // ── 受保护的控制台（需登录；/monitor、/logs 统一进入 dashboard）──
         .route("/monitor", get(dashboard_html))
@@ -90,9 +94,74 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/users/{username}", delete(delete_user))
         .route("/api/users/{username}/reset", post(reset_password))
         .route("/api/users/{username}/role", post(set_role))
+        // ── 人机验证（Turnstile）设置 ──
+        // GET 公开（仅返回 enabled + site_key，供登录/注册页渲染；不含私密密钥）
+        // POST 仅管理员：保存站点密钥 + 服务端密钥 + 启用开关
+        .route("/api/settings/turnstile/test", post(turnstile_test))
+        .route("/api/settings/turnstile", get(turnstile_get).post(turnstile_set))
         .route("/api/room/create", post(create_room_api))
         .route("/api/room/{code}/info", get(room_info_api))
         .with_state(state)
+}
+
+/// Cloudflare Turnstile 服务端校验（人机测试）。
+///
+/// 配置来自后台持久化的 `TurnstileConfig`（与凭据同密钥加密落盘），不再读取环境变量。
+/// 默认 `enabled=false`：模块关闭时直接放行。启用后：
+/// 调用 Cloudflare Turnstile siteverify 校验 token。
+/// - token 合法性由调用方前置判断；
+/// - siteverify 必须 `success===true` 且 `action` 与前端一致；
+/// - 失败时透出 Cloudflare 的 error-codes，便于定位（如 invalid-input-secret 表示服务端密钥错误）。
+async fn siteverify(secret: &str, token: &str, action: &str) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://challenges.cloudflare.com/turnstile/v0/siteverify")
+        .form(&[("secret", secret), ("response", token), ("action", action)])
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await;
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => return Err(format!("人机验证服务暂不可用: {e}")),
+    };
+    let data: Value = match resp.json().await {
+        Ok(d) => d,
+        Err(e) => return Err(format!("人机验证响应解析失败: {e}")),
+    };
+    if data.get("success").and_then(Value::as_bool) != Some(true) {
+        if let Some(Value::Array(arr)) = data.get("error-codes") {
+            if !arr.is_empty() {
+                return Err(format!(
+                    "人机验证未通过: {}",
+                    arr.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")
+                ));
+            }
+        }
+        return Err("人机验证未通过".to_string());
+    }
+    if data.get("action").and_then(Value::as_str) != Some(action) {
+        return Err("人机验证 action 不匹配".to_string());
+    }
+    Ok(())
+}
+
+/// 登录/注册入口的 Turnstile 校验：
+///  - 未启用（`enabled=false`）直接放行；
+///  - 必须配置服务端密钥，否则拒绝（避免“启用却无密钥”的默认放行陷阱）；
+///  - token 缺失/超长视为非法；
+///  - siteverify 必须 `success===true` 且 `action` 与前端一致。
+/// 域名白名单本次不做（用户明确要求暂搁置）。
+async fn verify_turnstile(cfg: &crate::auth::TurnstileConfig, token: &str, action: &str) -> Result<(), String> {
+    if !cfg.enabled {
+        return Ok(()); // 默认不启用人机验证
+    }
+    if cfg.secret_key.trim().is_empty() {
+        return Err("人机验证已启用但未配置服务端密钥".to_string());
+    }
+    if token.is_empty() || token.len() > 2048 {
+        return Err("人机验证 token 缺失或非法".to_string());
+    }
+    siteverify(&cfg.secret_key, token, action).await
 }
 
 /// CORS 头（对所有响应生效）
@@ -409,6 +478,21 @@ async fn login_api(headers: HeaderMap, Json(payload): Json<Value>) -> impl IntoR
         .unwrap_or("")
         .to_string();
 
+    // 人机验证（Turnstile）：先过验证码，再校验凭证
+    let turnstile_token = payload
+        .get("turnstile_token")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let turnstile_cfg = store.get_turnstile();
+    if let Err(e) = verify_turnstile(&turnstile_cfg, &turnstile_token, "login").await {
+        return (
+            StatusCode::BAD_REQUEST,
+            cors_headers(),
+            Json(json!({ "success": false, "error": e })),
+        );
+    }
+
     if username.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -502,6 +586,97 @@ async fn change_password_api(headers: HeaderMap, Json(payload): Json<Value>) -> 
             );
             (StatusCode::OK, h, Json(json!({ "success": true })))
         }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            cors_headers(),
+            Json(json!({ "success": false, "error": e })),
+        ),
+    }
+}
+
+/// GET /register —— 开放注册页
+async fn register_html() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        include_str!("../assets/register.html"),
+    )
+        .into_response()
+}
+
+/// POST /api/auth/change-username —— 修改自己的用户名（需当前密码，刷新会话）
+async fn change_username_api(headers: HeaderMap, Json(payload): Json<Value>) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    let Some(claims) = store
+        .session_from_headers(&headers, "full")
+        .or_else(|| store.session_from_headers(&headers, "pwchange"))
+    else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            cors_headers(),
+            Json(json!({ "success": false, "error": "请先登录" })),
+        );
+    };
+    let current = payload
+        .get("current_password")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let new_username = payload
+        .get("new_username")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    match store.change_own_username(&claims.sub, &current, &new_username) {
+        Ok(()) => {
+            let token = store.sign_session(&claims.scope, &new_username, &claims.role);
+            let max_age = if claims.scope == "pwchange" { 900 } else { 43_200 };
+            let mut h = cors_headers();
+            h.insert(
+                header::SET_COOKIE,
+                HeaderValue::from_str(&session_cookie(&token, max_age, is_secure(&headers))).unwrap(),
+            );
+            (StatusCode::OK, h, Json(json!({ "success": true, "username": new_username })))
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            cors_headers(),
+            Json(json!({ "success": false, "error": e })),
+        ),
+    }
+}
+
+/// POST /api/auth/register —— 开放注册（默认普通用户）
+async fn register_api(Json(payload): Json<Value>) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    let username = payload
+        .get("username")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let password = payload
+        .get("password")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    // 人机验证（Turnstile）：先过验证码，再创建账户
+    let turnstile_token = payload
+        .get("turnstile_token")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let turnstile_cfg = store.get_turnstile();
+    if let Err(e) = verify_turnstile(&turnstile_cfg, &turnstile_token, "signup").await {
+        return (
+            StatusCode::BAD_REQUEST,
+            cors_headers(),
+            Json(json!({ "success": false, "error": e })),
+        );
+    }
+    match store.register(&username, &password) {
+        Ok(()) => (StatusCode::OK, cors_headers(), Json(json!({ "success": true }))),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             cors_headers(),
@@ -638,6 +813,93 @@ async fn set_role(
             cors_headers(),
             Json(json!({ "success": false, "error": e })),
         ),
+    }
+}
+
+// ── 人机验证（Turnstile）设置 ──
+
+/// GET /api/settings/turnstile — 公开（供登录/注册页判断是否渲染组件）
+/// 仅返回 `enabled` + `site_key`，绝不返回私密的服务端密钥。
+async fn turnstile_get() -> impl IntoResponse {
+    let cfg = crate::auth::auth_store().get_turnstile();
+    (
+        StatusCode::OK,
+        cors_headers(),
+        Json(json!({ "enabled": cfg.enabled, "site_key": cfg.site_key })),
+    )
+}
+
+/// POST /api/settings/turnstile — 仅管理员：保存配置并加密落盘
+async fn turnstile_set(headers: HeaderMap, Json(payload): Json<Value>) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    let Some(claims) = store.session_from_headers(&headers, "full") else {
+        return (StatusCode::UNAUTHORIZED, cors_headers(), Json(json!({ "success": false, "error": "未登录" })));
+    };
+    if claims.role != crate::auth::ROLE_ADMIN {
+        return (StatusCode::FORBIDDEN, cors_headers(), Json(json!({ "success": false, "error": "权限不足" })));
+    }
+    let current = store.get_turnstile();
+    let new_secret = payload
+        .get("secret_key")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let cfg = crate::auth::TurnstileConfig {
+        enabled: payload.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+        site_key: payload
+            .get("site_key")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+        // 服务端密钥为空时保留已有值（避免仅改站点密钥就清空密钥）
+        secret_key: if new_secret.is_empty() {
+            current.secret_key
+        } else {
+            new_secret
+        },
+    };
+    match store.set_turnstile(cfg) {
+        Ok(()) => (StatusCode::OK, cors_headers(), Json(json!({ "success": true }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            cors_headers(),
+            Json(json!({ "success": false, "error": e })),
+        ),
+    }
+}
+
+/// POST /api/settings/turnstile/test — 仅管理员：用真实挑战校验 site_key + secret_key。
+/// 前端先在设置面板用输入的 site_key 渲染 Turnstile 组件、完成挑战拿到 token，再提交此处校验；
+/// 通过后才能保存，避免把无效密钥写盘。secret_key 为空时回退到已存储密钥（用于“保留原密钥”场景）。
+async fn turnstile_test(headers: HeaderMap, Json(payload): Json<Value>) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    let Some(claims) = store.session_from_headers(&headers, "full") else {
+        return (StatusCode::UNAUTHORIZED, cors_headers(), Json(json!({ "ok": false, "error": "未登录" })));
+    };
+    if claims.role != crate::auth::ROLE_ADMIN {
+        return (StatusCode::FORBIDDEN, cors_headers(), Json(json!({ "ok": false, "error": "权限不足" })));
+    }
+    let site_key = payload.get("site_key").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let token = payload.get("token").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    // 服务端密钥：输入为空则回退到已存储密钥（用于“保留原密钥”场景的测试）
+    let mut secret = payload.get("secret_key").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    if secret.is_empty() {
+        secret = store.get_turnstile().secret_key;
+    }
+    if site_key.is_empty() {
+        return (StatusCode::BAD_REQUEST, cors_headers(), Json(json!({ "ok": false, "error": "请先填写站点密钥" })));
+    }
+    if token.is_empty() {
+        return (StatusCode::BAD_REQUEST, cors_headers(), Json(json!({ "ok": false, "error": "请先完成人机验证组件挑战以获取 token" })));
+    }
+    if secret.is_empty() {
+        return (StatusCode::BAD_REQUEST, cors_headers(), Json(json!({ "ok": false, "error": "无可用服务端密钥（请填写，或先在已启用配置中保存）" })));
+    }
+    match siteverify(&secret, &token, "test").await {
+        Ok(()) => (StatusCode::OK, cors_headers(), Json(json!({ "ok": true }))),
+        Err(e) => (StatusCode::OK, cors_headers(), Json(json!({ "ok": false, "error": e }))),
     }
 }
 

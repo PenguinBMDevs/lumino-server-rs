@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lumino 控制台 · 注册</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>
+    <style>
+      .grid-bg {
+        background-image:
+          linear-gradient(rgba(99, 102, 241, 0.06) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(99, 102, 241, 0.06) 1px, transparent 1px);
+        background-size: 38px 38px;
+      }
+      .glow { box-shadow: 0 0 60px -12px rgba(99, 102, 241, 0.55); }
+    </style>
+  </head>
+  <body class="min-h-screen bg-slate-950 text-slate-200 grid-bg flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-gradient-to-br from-indigo-950/30 via-slate-950 to-slate-900/60 pointer-events-none"></div>
+
+    <main class="relative w-full max-w-md">
+      <div class="flex flex-col items-center mb-6">
+        <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 grid place-items-center glow">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-9 h-9 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M19 8v6M22 11h-6"></path>
+          </svg>
+        </div>
+        <h1 class="mt-4 text-2xl font-semibold tracking-tight text-white">创建账户</h1>
+        <p class="text-sm text-slate-400">新账户默认为普通用户</p>
+      </div>
+
+      <form id="reg-form" class="relative rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl p-7 glow">
+        <label class="block text-sm font-medium text-slate-300 mb-2">用户名</label>
+        <input id="username" type="text" autocomplete="username" required
+          class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white placeholder-slate-500 outline-none focus:ring-2 focus:ring-indigo-500/60 transition" placeholder="3-32 位字母数字下划线" />
+
+        <label class="block text-sm font-medium text-slate-300 mt-4 mb-2">密码</label>
+        <input id="np" type="password" autocomplete="new-password" required
+          class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white placeholder-slate-500 outline-none focus:ring-2 focus:ring-indigo-500/60 transition" placeholder="至少 12 位" />
+
+        <div class="mt-3 flex gap-1">
+          <div class="h-1.5 flex-1 rounded bg-slate-700" id="b0"></div>
+          <div class="h-1.5 flex-1 rounded bg-slate-700" id="b1"></div>
+          <div class="h-1.5 flex-1 rounded bg-slate-700" id="b2"></div>
+          <div class="h-1.5 flex-1 rounded bg-slate-700" id="b3"></div>
+        </div>
+        <p id="strength-label" class="mt-1 text-xs text-slate-500">强度：—</p>
+
+        <label class="block text-sm font-medium text-slate-300 mt-4 mb-2">确认密码</label>
+        <input id="confirm" type="password" autocomplete="new-password" required
+          class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white placeholder-slate-500 outline-none focus:ring-2 focus:ring-indigo-500/60 transition" />
+
+        <ul class="mt-4 space-y-1.5 text-xs">
+          <li data-req="len" class="flex items-center gap-2 text-slate-500"><span class="tick">○</span> 至少 12 位字符</li>
+          <li data-req="cls" class="flex items-center gap-2 text-slate-500"><span class="tick">○</span> 含大小写字母、数字、符号中至少三类</li>
+          <li data-req="weak" class="flex items-center gap-2 text-slate-500"><span class="tick">○</span> 不含常见弱词组（admin/password 等）</li>
+        </ul>
+
+        <div id="error" class="hidden mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2"></div>
+        <div id="success" class="hidden mt-3 text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2"></div>
+
+        <button id="submit" type="submit"
+          class="mt-6 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-400 hover:to-violet-500 text-white font-semibold py-3 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+          <span id="label">注册</span>
+          <svg id="spinner" class="hidden w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z"></path></svg>
+        </button>
+
+        <!-- Cloudflare Turnstile 人机验证（sitekey 由后台配置动态注入，默认不启用） -->
+        <div id="turnstile-holder" class="mt-4"></div>
+
+        <p class="mt-4 text-center text-xs text-slate-500">已有账户？<a href="/login" class="text-indigo-400 hover:text-indigo-300">前往登录</a></p>
+      </form>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const np = $("np"), confirm = $("confirm"), username = $("username");
+      const submit = $("submit"), label = $("label"), spinner = $("spinner");
+      const errBox = $("error"), okBox = $("success");
+
+      function checks() {
+        const v = np.value;
+        const reqs = {
+          len: v.length >= 12,
+          cls: [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/].filter((r) => r.test(v)).length >= 3,
+          weak: !/admin|password|lumino|123456|qwerty|letmein/i.test(v),
+        };
+        let passed = 0;
+        for (const k in reqs) {
+          const li = document.querySelector(`[data-req="${k}"]`);
+          const tick = li.querySelector(".tick");
+          if (reqs[k]) { li.className = "flex items-center gap-2 text-emerald-400"; tick.textContent = "●"; passed++; }
+          else { li.className = "flex items-center gap-2 text-slate-500"; tick.textContent = "○"; }
+        }
+        return { reqs, passed };
+      }
+      function strength() {
+        const v = np.value;
+        if (!v) { setBars(0, "强度：—", "text-slate-500"); return; }
+        const { passed } = checks();
+        let lvl = 0;
+        if (v.length >= 12) lvl = Math.min(3, Math.max(1, passed - 1));
+        if (v.length >= 16 && passed === 3) lvl = 3;
+        const labels = ["极弱", "偏弱", "中等", "强"];
+        setBars(lvl, "强度：" + labels[lvl], "text-slate-300");
+      }
+      function setBars(lvl, text, cls) {
+        const palette = ["bg-rose-500", "bg-orange-500", "bg-amber-400", "bg-emerald-500"];
+        for (let i = 0; i < 4; i++) {
+          $("b" + i).className = "h-1.5 flex-1 rounded " + (i <= lvl && lvl > 0 ? palette[lvl] : "bg-slate-700");
+        }
+        const el = $("strength-label"); el.textContent = text; el.className = "mt-1 text-xs " + cls;
+      }
+      [np, confirm].forEach((el) => el.addEventListener("input", () => { checks(); strength(); errBox.classList.add("hidden"); }));
+
+      // ── 人机验证（Turnstile）：仅在后台启用时动态注入组件 ──
+      let ttEnabled = false;
+      async function setupTurnstile() {
+        try {
+          const cfg = await (await fetch("/api/settings/turnstile")).json();
+          if (!cfg.enabled || !cfg.site_key) return; // 默认不启用
+          ttEnabled = true;
+          const holder = document.getElementById("turnstile-holder");
+          holder.innerHTML = '<div id="tt-widget"></div>'; // 仅占位，显式 render 注入组件
+          const el = document.getElementById("tt-widget");
+          const mount = () => {
+            // 必须等 Turnstile API ready 后再 render，否则会静默失败、组件不挂载
+            if (window.turnstile && typeof window.turnstile.ready === "function") {
+              turnstile.ready(() => {
+                turnstile.render(el, {
+                  sitekey: cfg.site_key,
+                  action: "signup",
+                  "error-callback": () => showError("人机验证组件加载失败，请刷新页面后重试"),
+                });
+              });
+            } else {
+              setTimeout(mount, 120);
+            }
+          };
+          mount();
+        } catch (e) { /* 拉取失败则不渲染，按未启用处理 */ }
+      }
+      setupTurnstile();
+
+      $("reg-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        errBox.classList.add("hidden"); okBox.classList.add("hidden");
+        const { passed } = checks();
+        if (np.value !== confirm.value) { showError("两次输入的密码不一致"); return; }
+        if (passed < 3) { showError("请满足全部密码要求"); return; }
+        if (username.value.trim().length < 3) { showError("用户名至少 3 位"); return; }
+
+        label.textContent = "提交中"; spinner.classList.remove("hidden"); submit.disabled = true;
+        try {
+          const token = ttEnabled
+            ? (document.querySelector('#tt-widget [name="cf-turnstile-response"]')?.value || "")
+            : "";
+          const res = await fetch("/api/auth/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: username.value.trim(), password: np.value, turnstile_token: token }),
+          });
+          const data = await res.json();
+          if (res.ok && data.success) {
+            okBox.textContent = "注册成功，正在跳转到登录…";
+            okBox.classList.remove("hidden");
+            setTimeout(() => (window.location.href = "/login"), 900);
+          } else { showError(data.error || "注册失败"); if (ttEnabled && window.turnstile) turnstile.reset("#tt-widget"); reset(); }
+        } catch (e) { showError("网络错误，请稍后重试"); if (ttEnabled && window.turnstile) turnstile.reset("#tt-widget"); reset(); }
+      });
+      function showError(m) { errBox.textContent = m; errBox.classList.remove("hidden"); }
+      function reset() { label.textContent = "注册"; spinner.classList.add("hidden"); submit.disabled = false; }
+    </script>
+  </body>
+</html>

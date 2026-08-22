@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Lumino 安全控制台 · 登录</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>
     <style>
       .grid-bg {
         background-image:
@@ -87,6 +88,9 @@
           </svg>
         </button>
 
+        <!-- Cloudflare Turnstile 人机验证（sitekey 由后台配置动态注入，默认不启用） -->
+        <div id="turnstile-holder" class="mt-4"></div>
+
         <p class="mt-4 text-center text-xs text-slate-500">
           受 Argon2id + AES-256-GCM 保护 · 连续失败将临时锁定
         </p>
@@ -95,6 +99,7 @@
       <p class="mt-6 text-center text-xs text-slate-600">
         默认管理员密码 <code class="text-slate-400">admin</code> · 首次登录需强制修改
       </p>
+      <p class="mt-3 text-center text-xs text-slate-500">还没有账户？<a href="/register" class="text-indigo-400 hover:text-indigo-300">立即注册</a></p>
     </main>
 
     <script>
@@ -116,6 +121,35 @@
         errBox.classList.remove("hidden");
       }
 
+      // ── 人机验证（Turnstile）：仅在后台启用时动态注入组件 ──
+      let ttEnabled = false;
+      async function setupTurnstile() {
+        try {
+          const cfg = await (await fetch("/api/settings/turnstile")).json();
+          if (!cfg.enabled || !cfg.site_key) return; // 默认不启用
+          ttEnabled = true;
+          const holder = document.getElementById("turnstile-holder");
+          holder.innerHTML = '<div id="tt-widget"></div>'; // 仅占位，显式 render 注入组件
+          const el = document.getElementById("tt-widget");
+          const mount = () => {
+            // 必须等 Turnstile API ready 后再 render，否则会静默失败、组件不挂载
+            if (window.turnstile && typeof window.turnstile.ready === "function") {
+              turnstile.ready(() => {
+                turnstile.render(el, {
+                  sitekey: cfg.site_key,
+                  action: "login",
+                  "error-callback": () => showError("人机验证组件加载失败，请刷新页面后重试"),
+                });
+              });
+            } else {
+              setTimeout(mount, 120);
+            }
+          };
+          mount();
+        } catch (e) { /* 拉取失败则不渲染，按未启用处理 */ }
+      }
+      setupTurnstile();
+
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
         errBox.classList.add("hidden");
@@ -124,16 +158,20 @@
         submit.disabled = true;
 
         try {
+          const token = ttEnabled
+            ? (document.querySelector('#tt-widget [name="cf-turnstile-response"]')?.value || "")
+            : "";
           const res = await fetch("/api/auth/login", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username: document.getElementById("username").value, password: pw.value }),
+            body: JSON.stringify({ username: document.getElementById("username").value, password: pw.value, turnstile_token: token }),
           });
           const data = await res.json();
           if (res.ok && data.success) {
             window.location.href = data.requires_change ? "/change-password" : "/monitor";
           } else {
             showError(data.error || "登录失败");
+            if (ttEnabled && window.turnstile) turnstile.reset("#tt-widget"); // 失败后刷新验证码
             if (data.lock_seconds) {
               startLock(data.lock_seconds);
             }

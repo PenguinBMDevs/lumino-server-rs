@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Lumino 控制台</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdeliv.net/npm/chart.js"></script>
+
     <style>
       .grid-bg {
         background-image:
@@ -52,6 +52,10 @@
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           用户管理
         </button>
+        <button data-view="turnstile" id="nav-turnstile" class="nav-item hidden w-full text-left px-3 py-2.5 rounded-lg border border-transparent text-slate-300 hover:bg-white/5 transition flex items-center gap-3">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          验证设置
+        </button>
         <button data-view="password" class="nav-item w-full text-left px-3 py-2.5 rounded-lg border border-transparent text-slate-300 hover:bg-white/5 transition flex items-center gap-3">
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           修改密码
@@ -93,11 +97,12 @@
 
         <!-- 监控 -->
         <section id="view-monitor" class="view">
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
             <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4 border-l-4 border-l-blue-500"><div class="text-2xl font-bold tabular-nums" id="conn-current">0</div><div class="text-xs text-slate-500 mt-1">当前连接</div></div>
             <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4 border-l-4 border-l-emerald-500"><div class="text-2xl font-bold tabular-nums" id="room-count">0</div><div class="text-xs text-slate-500 mt-1">活跃房间</div></div>
             <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4 border-l-4 border-l-amber-500"><div class="text-2xl font-bold tabular-nums" id="user-count">0</div><div class="text-xs text-slate-500 mt-1">在线用户</div></div>
             <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4 border-l-4 border-l-purple-500"><div class="text-2xl font-bold tabular-nums" id="rss">0</div><div class="text-xs text-slate-500 mt-1">内存 RSS (MB)</div></div>
+            <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4 border-l-4 border-l-orange-500"><div class="text-2xl font-bold tabular-nums" id="cpu-pct">0</div><div class="text-xs text-slate-500 mt-1">CPU 占用 (%)</div></div>
           </div>
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4"><h3 class="text-sm text-slate-400 mb-2">连接 / 房间 / 用户趋势</h3><div class="relative h-48"><canvas id="connChart"></canvas></div></div>
@@ -172,15 +177,54 @@
             <div id="cp-ok" class="hidden mt-3 text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2"></div>
             <button id="cp-submit" class="mt-6 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-400 hover:to-violet-500 text-white font-semibold py-3 transition">确认修改</button>
           </div>
+
+          <div class="max-w-md rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-7 mt-5">
+            <h3 class="text-lg font-semibold text-white mb-5">修改我的用户名</h3>
+            <label class="block text-sm text-slate-300 mb-2">当前用户名</label>
+            <input id="cu-current" type="text" disabled class="w-full rounded-xl bg-slate-900/40 border border-white/10 px-4 py-3 text-slate-400 outline-none" placeholder="当前用户名">
+            <label class="block text-sm text-slate-300 mt-4 mb-2">新用户名</label>
+            <input id="cu-new" type="text" class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white outline-none focus:ring-2 focus:ring-indigo-500/60" placeholder="3-32 位字母数字下划线">
+            <label class="block text-sm text-slate-300 mt-4 mb-2">当前密码（验证身份）</label>
+            <input id="cu-pass" type="password" class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white outline-none focus:ring-2 focus:ring-indigo-500/60" placeholder="当前密码">
+            <div id="cu-error" class="hidden mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2"></div>
+            <div id="cu-ok" class="hidden mt-3 text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2"></div>
+            <button id="cu-submit" class="mt-6 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-400 hover:to-violet-500 text-white font-semibold py-3 transition">确认修改用户名</button>
+          </div>
+        </section>
+
+        <!-- 验证设置（仅管理员） -->
+        <section id="view-turnstile" class="view">
+          <div class="max-w-md rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-7">
+            <h3 class="text-lg font-semibold text-white mb-5">人机验证（Turnstile）</h3>
+            <label class="flex items-center justify-between cursor-pointer mb-5">
+              <span class="text-sm text-slate-300">启用人机验证</span>
+              <input id="tt-enabled" type="checkbox" class="w-5 h-5 accent-indigo-500">
+            </label>
+            <label class="block text-sm text-slate-300 mb-2">站点密钥（Site Key）</label>
+            <input id="tt-sitekey" type="text" class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white outline-none focus:ring-2 focus:ring-indigo-500/60" placeholder="0x4AAAAAA...">
+            <label class="block text-sm text-slate-300 mt-4 mb-2">服务端密钥（Secret Key）</label>
+            <input id="tt-secret" type="password" class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white outline-none focus:ring-2 focus:ring-indigo-500/60" placeholder="留空则不修改已存密钥">
+            <div class="mt-5 pt-4 border-t border-white/10">
+              <button id="tt-test" class="w-full rounded-xl bg-slate-700/60 hover:bg-slate-600/60 text-white font-semibold py-2.5 transition">测试验证（保存前需通过）</button>
+              <div id="tt-test-holder" class="mt-3"></div>
+              <div id="tt-test-status" class="hidden mt-3 text-sm rounded-lg px-3 py-2"></div>
+            </div>
+            <div id="tt-status" class="hidden mt-3 text-sm rounded-lg px-3 py-2"></div>
+            <button id="tt-save" class="mt-6 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-400 hover:to-violet-500 text-white font-semibold py-3 transition">保存设置</button>
+            <p class="mt-4 text-xs text-slate-500">默认关闭。启用后登录与注册需通过 Cloudflare Turnstile 校验；密钥随账户凭据加密落盘存储，代码中不再硬编码。保存前须先「测试验证」通过（真实挑战 + 密钥核验），域名白名单暂未启用。</p>
+          </div>
         </section>
       </div>
     </main>
+
+    <!-- Turnstile 校验组件脚本：必须无 async/defer，否则 turnstile.ready() 会报错 -->
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>
 
     <script>
       let session = null;       // {username, role}
       let monitorStarted = false, monitorTimer = null;
       let logsStarted = false, ws = null;
-      const TITLES = { home: "概览", monitor: "监控", logs: "日志", users: "用户管理", password: "修改密码" };
+      const TITLES = { home: "概览", monitor: "监控", logs: "日志", users: "用户管理", password: "修改密码", turnstile: "验证设置" };
 
       // ── 启动：鉴权检查 + 初始视图 ──
       (async function boot() {
@@ -197,7 +241,7 @@
         const roleEl = document.getElementById("side-role");
         if (session.role === "admin") { roleEl.innerHTML = '<span class="text-indigo-400">管理员</span>'; document.getElementById("home-role").textContent = "管理员"; }
         else { roleEl.innerHTML = '<span class="text-slate-400">普通用户</span>'; document.getElementById("home-role").textContent = "普通用户"; }
-        if (session.role === "admin") document.getElementById("nav-users").classList.remove("hidden");
+        if (session.role === "admin") { document.getElementById("nav-users").classList.remove("hidden"); document.getElementById("nav-turnstile").classList.remove("hidden"); }
 
         document.getElementById("clock").textContent = new Date().toLocaleString();
         setInterval(() => document.getElementById("clock").textContent = new Date().toLocaleString(), 1000);
@@ -221,6 +265,7 @@
         if (name === "monitor") initMonitor();
         if (name === "users") loadUsers();
         if (name === "password") initPassword();
+        if (name === "turnstile") initTurnstile();
         if (name === "logs") { if (!logsStarted) { initLogs(); logsStarted = true; } connectLogs(); }
         // 离开日志视图时断开 WS
         if (name !== "logs" && ws) { try { ws.close(); } catch (e) {} ws = null; }
@@ -229,42 +274,50 @@
       }
 
       // ── 监控 ──
-      let charts = null;
+      // 监控：自包含 SVG-free canvas 迷你折线，不依赖任何外部 CDN（离线/LAN 也能渲染）
+      let hist = null;
       function initMonitor() {
-        if (charts) return;
-        const hist = { labels: [], conn: [], rooms: [], users: [], msgIn: [], noteOps: [], mem: [], cpu: [] };
-        const mk = (id, color, label, sc, sl) => {
-          const ds = [{ label, data: [], borderColor: color, backgroundColor: color + "22", borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0 }];
-          if (sc) ds.push({ label: sl, data: [], borderColor: sc, backgroundColor: sc + "22", borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0 });
-          return new Chart(document.getElementById(id).getContext("2d"), {
-            type: "line", data: { labels: hist.labels, datasets: ds },
-            options: { responsive: true, maintainAspectRatio: false, animation: false,
-              plugins: { legend: { labels: { color: "#94a3b8", boxWidth: 12 } } },
-              scales: { x: { ticks: { color: "#475569", maxTicksLimit: 6 } }, y: { beginAtZero: true, ticks: { color: "#475569" } } } }
-          });
-        };
-        charts = {
-          hist,
-          conn: mk("connChart", "#3b82f6", "连接", "#22c55e", "房间"),
-          rate: mk("rateChart", "#ef4444", "消息进", "#eab308", "音符操作"),
-          mem: mk("memChart", "#a855f7", "内存"),
-          cpu: mk("cpuChart", "#f97316", "CPU"),
-        };
+        if (hist) return;
+        hist = { labels: [], conn: [], rooms: [], users: [], msgIn: [], noteOps: [], mem: [], cpu: [] };
+      }
+      function drawSpark(id, data, color, fill) {
+        const cv = document.getElementById(id);
+        if (!cv) return;
+        const w = cv.clientWidth || 300, h = cv.clientHeight || 180;
+        if (cv.width !== w) cv.width = w;
+        if (cv.height !== h) cv.height = h;
+        const ctx = cv.getContext("2d");
+        ctx.clearRect(0, 0, w, h);
+        if (data.length < 2) return;
+        const max = Math.max(1, ...data);
+        ctx.beginPath();
+        data.forEach((v, i) => {
+          const x = (i / (data.length - 1)) * w;
+          const y = h - 6 - (v / max) * (h - 14);
+          i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        });
+        ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+        if (fill) { ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); }
       }
       function monitorTick() {
-        if (!charts) return;
         fetch("/metrics").then(r => r.json()).then(d => {
+          // 统计卡片：无条件更新（不依赖任何图表库，避免 CDN 失败导致整面板恒为 0）
           document.getElementById("conn-current").textContent = d.connections.current;
           document.getElementById("room-count").textContent = d.rooms;
           document.getElementById("user-count").textContent = d.users;
-          document.getElementById("rss").textContent = d.resources.rss_mb.toFixed(1);
-          const h = charts.hist;
+          document.getElementById("rss").textContent = (d.resources.rss_mb || 0).toFixed(1);
+          document.getElementById("cpu-pct").textContent = (d.resources.cpu_pct || 0).toFixed(1);
+          if (!hist) initMonitor();
+          const h = hist;
           h.labels.push(new Date().toLocaleTimeString());
           h.conn.push(d.connections.current); h.rooms.push(d.rooms); h.users.push(d.users);
           h.msgIn.push(Math.round(d.rates.msgs_in)); h.noteOps.push(Math.round(d.rates.note_ops));
           h.mem.push(d.resources.rss_mb); h.cpu.push(d.resources.cpu_pct);
           if (h.labels.length > 120) ["labels","conn","rooms","users","msgIn","noteOps","mem","cpu"].forEach(k => h[k].shift());
-          charts.conn.update(); charts.rate.update(); charts.mem.update(); charts.cpu.update();
+          drawSpark("connChart", h.conn, "#3b82f6", "rgba(59,130,246,0.13)");
+          drawSpark("rateChart", h.msgIn, "#ef4444", "rgba(239,68,68,0.13)");
+          drawSpark("memChart", h.mem, "#a855f7", "rgba(168,85,247,0.13)");
+          drawSpark("cpuChart", h.cpu, "#f97316", "rgba(249,115,22,0.13)");
         }).catch(() => {});
       }
 
@@ -379,6 +432,126 @@
         const cp = document.getElementById("cp-new"), cf = document.getElementById("cp-confirm");
         [cp, cf].forEach(el => el.addEventListener("input", () => { checkPwd(); document.getElementById("cp-error").classList.add("hidden"); }));
         document.getElementById("cp-submit").addEventListener("click", changePassword);
+        // 用户名修改（预填当前用户名 + 绑定提交）
+        document.getElementById("cu-current").value = session.username;
+        document.getElementById("cu-submit").addEventListener("click", changeUsername);
+      }
+      async function changeUsername() {
+        const err = document.getElementById("cu-error"), ok = document.getElementById("cu-ok");
+        err.classList.add("hidden"); ok.classList.add("hidden");
+        const nu = document.getElementById("cu-new").value.trim();
+        const cur = document.getElementById("cu-pass").value;
+        if (nu.length < 3) { err.textContent = "新用户名至少 3 位"; err.classList.remove("hidden"); return; }
+        const res = await fetch("/api/auth/change-username", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ current_password: cur, new_username: nu }) });
+        const d = await res.json();
+        if (res.ok && d.success) {
+          ok.textContent = "用户名已更新为 " + d.username + "，正在刷新…";
+          ok.classList.remove("hidden");
+          setTimeout(() => location.reload(), 800);
+        } else { err.textContent = d.error || "修改失败"; err.classList.remove("hidden"); }
+      }
+      // ── 验证设置（Turnstile）──
+      let ttTestedSiteKey = "";
+      let ttTestedSecret = "";
+      let ttTestPassed = false;
+
+      function initTurnstile() {
+        const status = document.getElementById("tt-status");
+        const tstatus = document.getElementById("tt-test-status");
+        status.className = "hidden mt-3 text-sm rounded-lg px-3 py-2";
+        tstatus.className = "hidden mt-3 text-sm rounded-lg px-3 py-2";
+        ttTestPassed = false; ttTestedSiteKey = ""; ttTestedSecret = "";
+
+        const skEl = document.getElementById("tt-sitekey");
+        const seEl = document.getElementById("tt-secret");
+        // 修改密钥后，已通过的测试失效，必须重新测试
+        const invalidate = () => {
+          ttTestPassed = false; ttTestedSiteKey = ""; ttTestedSecret = "";
+          tstatus.className = "hidden mt-3 text-sm rounded-lg px-3 py-2";
+        };
+        skEl.oninput = invalidate; seEl.oninput = invalidate;
+
+        fetch("/api/settings/turnstile").then(r => r.json()).then(cfg => {
+          skEl.value = cfg.site_key || "";
+          // 服务端密钥不回显
+        }).catch(() => {});
+
+        // 测试验证：用当前输入的 site_key 渲染组件，完成挑战后校验密钥
+        document.getElementById("tt-test").onclick = () => {
+          const site_key = skEl.value.trim();
+          const secret = seEl.value; // 空=使用已存密钥
+          tstatus.className = "mt-3 text-sm text-slate-300 bg-slate-500/10 border border-slate-500/20 rounded-lg px-3 py-2";
+          tstatus.textContent = "正在准备验证组件…";
+          if (!site_key) {
+            tstatus.textContent = "请先填写站点密钥";
+            tstatus.className = "mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2";
+            return;
+          }
+          const holder = document.getElementById("tt-test-holder");
+          holder.innerHTML = '<div id="tt-test-widget"></div>';
+          const el = document.getElementById("tt-test-widget");
+          const mount = () => {
+            if (window.turnstile && typeof window.turnstile.ready === "function") {
+              turnstile.ready(() => {
+                turnstile.render(el, {
+                  sitekey: site_key,
+                  action: "test",
+                  callback: async (token) => {
+                    tstatus.textContent = "组件已通过，正在核验密钥…";
+                    const res = await fetch("/api/settings/turnstile/test", {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ site_key, secret_key: secret, token }),
+                    });
+                    const d = await res.json();
+                    if (d.ok) {
+                      ttTestPassed = true; ttTestedSiteKey = site_key; ttTestedSecret = secret;
+                      tstatus.textContent = "✓ 验证通过，现在可以保存。";
+                      tstatus.className = "mt-3 text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2";
+                    } else {
+                      ttTestPassed = false;
+                      tstatus.textContent = d.error || "验证未通过";
+                      tstatus.className = "mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2";
+                    }
+                  },
+                  "error-callback": () => {
+                    tstatus.textContent = "人机验证组件加载失败，请检查站点密钥与网络后重试";
+                    tstatus.className = "mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2";
+                  },
+                });
+              });
+            } else {
+              setTimeout(mount, 120);
+            }
+          };
+          mount();
+        };
+
+        document.getElementById("tt-save").onclick = async () => {
+          status.className = "hidden mt-3 text-sm rounded-lg px-3 py-2";
+          const site_key = skEl.value.trim();
+          const secret = seEl.value; // 空=不修改
+          if (!ttTestPassed || ttTestedSiteKey !== site_key || ttTestedSecret !== secret) {
+            status.textContent = "请先点击「测试验证」并通过后再保存。";
+            status.className = "mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2";
+            return;
+          }
+          const enabled = document.getElementById("tt-enabled").checked;
+          const res = await fetch("/api/settings/turnstile", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled, site_key, secret_key: secret }),
+          });
+          const d = await res.json();
+          if (res.ok && d.success) {
+            ttTestPassed = false; ttTestedSiteKey = ""; ttTestedSecret = "";
+            status.textContent = "已保存，配置已加密写入本地。";
+            status.className = "mt-3 text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2";
+            document.getElementById("tt-secret").value = "";
+            document.getElementById("tt-test-holder").innerHTML = "";
+          } else {
+            status.textContent = d.error || "保存失败";
+            status.className = "mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2";
+          }
+        };
       }
       function checkPwd() {
         const v = document.getElementById("cp-new").value;

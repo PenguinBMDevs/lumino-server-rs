@@ -36,6 +36,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 futures-util = "0.3"
 tokio-tungstenite = "0.24"
+# ── 人机验证（Cloudflare Turnstile 服务端 siteverify）──
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # ── 安全 / 密码存储 ──
 argon2 = "0.5"          # Argon2id 内存硬密码哈希（OWASP 推荐）
 aes-gcm = "0.10"        # AES-256-GCM 配置文件静态加密（防落盘泄露）

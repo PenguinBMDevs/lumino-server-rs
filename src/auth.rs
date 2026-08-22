@@ -66,6 +66,33 @@ struct Account {
 #[derive(Serialize, Deserialize, Clone)]
 struct UserStore {
     accounts: Vec<Account>,
+    /// 人机验证（Cloudflare Turnstile）配置，与凭据同密级加密落盘
+    #[serde(default)]
+    turnstile: TurnstileConfig,
+}
+
+/// 人机验证（Cloudflare Turnstile）配置
+///
+/// 随 `UserStore` 一起 AES-256-GCM 加密落盘（与凭据同密级，绝不在代码中硬编码）。
+/// 默认关闭：必须经后台配置并显式启用后服务端才校验。
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct TurnstileConfig {
+    /// 是否启用人机验证（默认 false）
+    pub enabled: bool,
+    /// 站点密钥（公开，前端渲染组件用）
+    pub site_key: String,
+    /// 服务端密钥（私密，仅后端 siteverify 使用）
+    pub secret_key: String,
+}
+impl Default for TurnstileConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            site_key: String::new(),
+            secret_key: String::new(),
+        }
+    }
 }
 
 /// 会话声明（HMAC 签名的载荷）
@@ -147,6 +174,21 @@ impl AuthStore {
         } else {
             None
         }
+    }
+
+    /// 读取人机验证配置（克隆，避免长期持有锁）
+    pub fn get_turnstile(&self) -> TurnstileConfig {
+        self.store.lock().unwrap().turnstile.clone()
+    }
+
+    /// 更新并持久化人机验证配置（与凭据同密钥 AES 加密落盘）
+    pub fn set_turnstile(&self, cfg: TurnstileConfig) -> Result<(), String> {
+        let store = {
+            let mut g = self.store.lock().unwrap();
+            g.turnstile = cfg;
+            g.clone()
+        };
+        self.persist(&store)
     }
 
     /// 账户是否强制要求改密
@@ -307,7 +349,61 @@ impl AuthStore {
         Ok(())
     }
 
-    /// 生成 Argon2id 哈希（PHC 编码串）
+    /// 用户修改自己的用户名（需当前密码；新用户名需唯一且合规）
+    pub fn change_own_username(
+        &self,
+        username: &str,
+        current_password: &str,
+        new_username: &str,
+    ) -> Result<(), String> {
+        if self.verify_login(username, current_password).is_none() {
+            return Err("当前密码错误".to_string());
+        }
+        let nu = new_username.trim();
+        if nu.len() < 3 || nu.len() > 32 {
+            return Err("用户名长度需为 3-32 位".to_string());
+        }
+        if !nu.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err("用户名仅允许字母、数字、下划线".to_string());
+        }
+        let mut store = self.store.lock().unwrap();
+        if store.accounts.iter().any(|a| a.username == nu) {
+            return Err("用户名已存在".to_string());
+        }
+        let Some(acc) = store.accounts.iter_mut().find(|a| a.username == username) else {
+            return Err("账户不存在".to_string());
+        };
+        acc.username = nu.to_string();
+        self.persist(&store)?;
+        Ok(())
+    }
+
+    /// 开放注册：新账户默认普通用户（role=user），使用自己设定的密码，无需强制改密
+    pub fn register(&self, username: &str, password: &str) -> Result<(), String> {
+        let u = username.trim();
+        if u.len() < 3 || u.len() > 32 {
+            return Err("用户名长度需为 3-32 位".to_string());
+        }
+        if !u.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err("用户名仅允许字母、数字、下划线".to_string());
+        }
+        validate_password_policy(password)?;
+        let mut store = self.store.lock().unwrap();
+        if store.accounts.iter().any(|a| a.username == u) {
+            return Err("用户名已存在".to_string());
+        }
+        let phc = self.hash_password(password)?;
+        store.accounts.push(Account {
+            username: u.to_string(),
+            phc,
+            role: ROLE_USER.to_string(),
+            must_change: false,
+            created_at: now_secs(),
+            changed_at: None,
+        });
+        self.persist(&store)?;
+        Ok(())
+    }
     fn hash_password(&self, password: &str) -> Result<String, String> {
         let mut salt_bytes = [0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut salt_bytes);
@@ -413,11 +509,40 @@ impl AuthStore {
     }
 }
 
-/// 解析配置目录：环境变量 `LUMINO_CONFIG_DIR` 优先，否则 `<CWD>/config`
+/// 解析配置目录：
+/// 1) 环境变量 `LUMINO_CONFIG_DIR` 优先；
+/// 2) 否则优先复用“已初始化”的配置目录（目录下存在 master.key 或 credentials.enc），
+///    依次在「工作目录 ./config」「可执行文件同目录 config」以及从可执行文件目录向上
+///    最多 4 层的 config 中查找——避免“启动目录不同（如重新编译后直接双击 exe / 服务以
+///    不同 CWD 拉起）导致误判为首次启动、重置默认管理员”；
+/// 3) 均不存在则回退到工作目录 ./config（首次启动将在此创建）。
 fn config_dir() -> PathBuf {
     if let Ok(d) = std::env::var("LUMINO_CONFIG_DIR") {
         if !d.is_empty() {
             return PathBuf::from(d);
+        }
+    }
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    candidates.push(PathBuf::from("config")); // 当前工作目录
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("config")); // 可执行文件同目录
+            // 从可执行文件目录向上查找最多 4 层（覆盖 target/debug 等布局）
+            let mut cur = dir.to_path_buf();
+            for _ in 0..4 {
+                match cur.parent() {
+                    Some(parent) => {
+                        candidates.push(parent.join("config"));
+                        cur = parent.to_path_buf();
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+    for c in &candidates {
+        if c.join("master.key").exists() || c.join("credentials.enc").exists() {
+            return c.clone();
         }
     }
     PathBuf::from("config")
@@ -464,6 +589,7 @@ fn load_or_create_store(path: &Path, master: &[u8; KEY_LEN]) -> Result<UserStore
                     created_at: legacy.created_at,
                     changed_at: legacy.changed_at,
                 }],
+                turnstile: TurnstileConfig::default(),
             });
         }
         return Err("凭据解析失败（格式无法识别），请删除 config/ 目录后重试".to_string());
@@ -487,6 +613,7 @@ fn load_or_create_store(path: &Path, master: &[u8; KEY_LEN]) -> Result<UserStore
             created_at: now_secs(),
             changed_at: None,
         }],
+        turnstile: TurnstileConfig::default(),
     };
     let json = serde_json::to_vec(&store).map_err(|e| e.to_string())?;
     let blob = encrypt_blob(master, &json)?;
