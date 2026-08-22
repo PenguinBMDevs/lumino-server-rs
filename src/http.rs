@@ -102,6 +102,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/settings/turnstile", get(turnstile_get).post(turnstile_set))
         .route("/api/room/create", post(create_room_api))
         .route("/api/room/{code}/info", get(room_info_api))
+        .route("/api/room/{code}/delete", post(delete_room_api))
+        .route("/api/room/{code}/kick", post(kick_user_api))
         .route("/api/rooms", get(rooms_api))
         .with_state(state)
 }
@@ -373,6 +375,57 @@ async fn room_info_api(
             StatusCode::NOT_FOUND,
             cors_headers(),
             Json(json!({ "error": "Room not found" })),
+        ),
+    }
+}
+
+/// POST /api/room/{code}/delete — 解散房间（房间管理）
+async fn delete_room_api(
+    State(state): State<Arc<AppState>>,
+    Path(code): Path<String>,
+) -> impl IntoResponse {
+    match state.delete_room(&code) {
+        Ok(()) => (
+            StatusCode::OK,
+            cors_headers(),
+            Json(json!({ "success": true })),
+        ),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            cors_headers(),
+            Json(json!({ "error": e })),
+        ),
+    }
+}
+
+/// POST /api/room/{code}/kick — 将用户移出房间
+async fn kick_user_api(
+    State(state): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    Json(payload): Json<Value>,
+) -> impl IntoResponse {
+    let user_id = payload
+        .get("user_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if user_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            cors_headers(),
+            Json(json!({ "error": "缺少 user_id" })),
+        );
+    }
+    match state.kick_user(&code, &user_id) {
+        Ok(()) => (
+            StatusCode::OK,
+            cors_headers(),
+            Json(json!({ "success": true })),
+        ),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            cors_headers(),
+            Json(json!({ "error": e })),
         ),
     }
 }

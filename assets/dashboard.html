@@ -20,6 +20,8 @@
       .nav-item.active { background: rgba(99,102,241,0.18); color: #fff; border-color: rgba(129,140,248,0.5); }
       .log-container::-webkit-scrollbar { width: 8px; }
       .log-container::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+      /* 监控折线图自适应容器尺寸，避免画布被钳在默认 300x150 而显示不完整 */
+      #connChart, #rateChart, #memChart, #cpuChart { width: 100%; height: 100%; display: block; }
     </style>
   </head>
   <body class="min-h-screen bg-slate-950 text-slate-200 grid-bg flex">
@@ -137,7 +139,11 @@
           <div class="flex flex-wrap items-center gap-3 mb-4">
             <h3 class="text-lg font-semibold text-white">活跃房间</h3>
             <span class="text-xs text-slate-500" id="rooms-updated"></span>
-            <button id="rooms-refresh" class="ml-auto px-3 py-1.5 rounded-lg bg-slate-700/50 hover:bg-slate-700 text-slate-200">立即刷新</button>
+            <button id="rooms-refresh" class="px-3 py-1.5 rounded-lg bg-slate-700/50 hover:bg-slate-700 text-slate-200">立即刷新</button>
+            <div class="ml-auto flex items-center gap-2">
+              <input id="room-name-input" placeholder="新房间名称" class="bg-slate-900/70 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50">
+              <button id="room-create" class="px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-sm">创建房间</button>
+            </div>
           </div>
           <div id="rooms-empty" class="hidden text-sm text-slate-500 py-10 text-center rounded-xl bg-slate-900/40 border border-white/10">当前没有活跃房间。</div>
           <div class="space-y-4" id="rooms-list"></div>
@@ -278,7 +284,7 @@
         document.getElementById("view-" + name).classList.add("active");
         document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.view === name));
         document.getElementById("page-title").textContent = TITLES[name] || "控制台";
-        if (name === "monitor") initMonitor();
+        if (name === "monitor") { initMonitor(); startCharts(); }
         if (name === "users") loadUsers();
         if (name === "password") initPassword();
         if (name === "turnstile") initTurnstile();
@@ -287,35 +293,64 @@
         // 离开日志视图时断开 WS
         if (name !== "logs" && ws) { try { ws.close(); } catch (e) {} ws = null; }
         if (name !== "monitor" && monitorTimer) { clearInterval(monitorTimer); monitorTimer = null; }
+        if (name !== "monitor" && animFrame) { stopCharts(); }
         if (name !== "rooms" && roomsTimer) { clearInterval(roomsTimer); roomsTimer = null; }
         if (name === "monitor") { monitorTick(); monitorTimer = setInterval(monitorTick, 1000); }
       }
 
       // ── 监控 ──
       // 监控：自包含 SVG-free canvas 迷你折线，不依赖任何外部 CDN（离线/LAN 也能渲染）
-      let hist = null;
+      let hist = null, disp = null;
       function initMonitor() {
         if (hist) return;
         hist = { labels: [], conn: [], rooms: [], users: [], msgIn: [], noteOps: [], mem: [], cpu: [] };
+        disp = { conn: [], rooms: [], users: [], msgIn: [], noteOps: [], mem: [], cpu: [] };
       }
       function drawSpark(id, data, color, fill) {
         const cv = document.getElementById(id);
         if (!cv) return;
+        const dpr = window.devicePixelRatio || 1;
         const w = cv.clientWidth || 300, h = cv.clientHeight || 180;
-        if (cv.width !== w) cv.width = w;
-        if (cv.height !== h) cv.height = h;
+        const W = Math.max(1, Math.round(w * dpr)), H = Math.max(1, Math.round(h * dpr));
+        if (cv.width !== W) cv.width = W;
+        if (cv.height !== H) cv.height = H;
         const ctx = cv.getContext("2d");
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, w, h);
         if (data.length < 2) return;
         const max = Math.max(1, ...data);
+        const padT = 8, padB = 8;
         ctx.beginPath();
         data.forEach((v, i) => {
           const x = (i / (data.length - 1)) * w;
-          const y = h - 6 - (v / max) * (h - 14);
+          const y = h - padB - (v / max) * (h - padT - padB);
           i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
         });
         ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
         if (fill) { ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); }
+      }
+
+      // 平滑过渡：disp 数组逐帧向 hist 缓动，再用 requestAnimationFrame 重绘
+      let animFrame = null;
+      function chartStep() {
+        if (!hist || !disp) return;
+        const keys = ["conn","rooms","users","msgIn","noteOps","mem","cpu"];
+        for (const k of keys) {
+          const h = hist[k], d = disp[k];
+          for (let i = 0; i < h.length; i++) d[i] += (h[i] - d[i]) * 0.18;
+        }
+        drawSpark("connChart", disp.conn, "#3b82f6", "rgba(59,130,246,0.13)");
+        drawSpark("rateChart", disp.msgIn, "#ef4444", "rgba(239,68,68,0.13)");
+        drawSpark("memChart", disp.mem, "#a855f7", "rgba(168,85,247,0.13)");
+        drawSpark("cpuChart", disp.cpu, "#f97316", "rgba(249,115,22,0.13)");
+      }
+      function startCharts() {
+        if (animFrame) return;
+        const loop = () => { chartStep(); animFrame = requestAnimationFrame(loop); };
+        animFrame = requestAnimationFrame(loop);
+      }
+      function stopCharts() {
+        if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
       }
       function monitorTick() {
         fetch("/metrics").then(r => r.json()).then(d => {
@@ -326,16 +361,17 @@
           document.getElementById("rss").textContent = (d.resources.rss_mb || 0).toFixed(1);
           document.getElementById("cpu-pct").textContent = (d.resources.cpu_pct || 0).toFixed(1);
           if (!hist) initMonitor();
-          const h = hist;
+          if (!disp) initMonitor();
+          const h = hist, dp = disp;
           h.labels.push(new Date().toLocaleTimeString());
           h.conn.push(d.connections.current); h.rooms.push(d.rooms); h.users.push(d.users);
           h.msgIn.push(Math.round(d.rates.msgs_in)); h.noteOps.push(Math.round(d.rates.note_ops));
           h.mem.push(d.resources.rss_mb); h.cpu.push(d.resources.cpu_pct);
+          dp.conn.push(d.connections.current); dp.rooms.push(d.rooms); dp.users.push(d.users);
+          dp.msgIn.push(Math.round(d.rates.msgs_in)); dp.noteOps.push(Math.round(d.rates.note_ops));
+          dp.mem.push(d.resources.rss_mb); dp.cpu.push(d.resources.cpu_pct);
           if (h.labels.length > 120) ["labels","conn","rooms","users","msgIn","noteOps","mem","cpu"].forEach(k => h[k].shift());
-          drawSpark("connChart", h.conn, "#3b82f6", "rgba(59,130,246,0.13)");
-          drawSpark("rateChart", h.msgIn, "#ef4444", "rgba(239,68,68,0.13)");
-          drawSpark("memChart", h.mem, "#a855f7", "rgba(168,85,247,0.13)");
-          drawSpark("cpuChart", h.cpu, "#f97316", "rgba(249,115,22,0.13)");
+          if (h.labels.length > 120) ["conn","rooms","users","msgIn","noteOps","mem","cpu"].forEach(k => dp[k].shift());
         }).catch(() => {});
       }
 
@@ -355,15 +391,19 @@
             const memberHtml = members.length
               ? members.map(m => {
                   const hostBadge = m.isHost ? '<span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">房主</span>' : "";
+                  const kick = m.isHost ? "" : '<button class="ml-1 px-1.5 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-[10px]" onclick="kickUser(\'' + r.inviteCode + "','" + m.id + '\')">踢出</button>';
                   const dot = '<span class="inline-block w-2 h-2 rounded-full mr-1" style="background:' + (m.color || "#888") + '"></span>';
-                  return '<span class="inline-flex items-center mr-2 mb-1 px-2 py-1 rounded-lg bg-slate-800/60 border border-white/10 text-xs text-slate-200">' + dot + escapeHtml(m.username) + hostBadge + "</span>";
+                  return '<span class="inline-flex items-center mr-2 mb-1 px-2 py-1 rounded-lg bg-slate-800/60 border border-white/10 text-xs text-slate-200">' + dot + escapeHtml(m.username) + hostBadge + kick + "</span>";
                 }).join("")
               : '<span class="text-xs text-slate-500">（无成员）</span>';
             return (
               '<div class="rounded-xl bg-slate-900/60 border border-white/10 p-4">' +
                 '<div class="flex items-center justify-between mb-2 gap-3">' +
                   '<div class="font-semibold text-white truncate">' + escapeHtml(r.name) + "</div>" +
-                  '<div class="text-xs text-slate-500 shrink-0">邀请码 <code class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">' + escapeHtml(r.inviteCode) + "</code></div>" +
+                  '<div class="flex items-center gap-2 shrink-0">' +
+                    '<span class="text-xs text-slate-500">邀请码 <code class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">' + escapeHtml(r.inviteCode) + "</code></span>" +
+                    '<button class="px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs" onclick="deleteRoom(\'' + r.inviteCode + '\')">解散</button>' +
+                  "</div>" +
                 "</div>" +
                 '<div class="flex items-center gap-4 text-sm text-slate-400 mb-3">' +
                   '<span>人数 <b class="text-slate-100 tabular-nums">' + (r.userCount || 0) + "</b> / " + (r.maxUsers || 0) + "</span>" +
@@ -376,6 +416,29 @@
           }).join("");
         }).catch(() => {});
       }
+      async function createRoom() {
+        const input = document.getElementById("room-name-input");
+        const name = input.value.trim() || ("房间 " + new Date().toLocaleTimeString());
+        const res = await fetch("/api/room/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+        const d = await res.json();
+        if (res.ok && d.success) { input.value = ""; roomsTick(); }
+        else alert(d.error || "创建失败");
+      }
+      async function deleteRoom(code) {
+        if (!confirm("确定解散房间 " + code + "？所有成员将被移出。")) return;
+        const res = await fetch("/api/room/" + encodeURIComponent(code) + "/delete", { method: "POST" });
+        const d = await res.json();
+        if (!res.ok) alert(d.error || "解散失败");
+        roomsTick();
+      }
+      async function kickUser(code, userId) {
+        if (!confirm("确定将该成员移出房间 " + code + "？")) return;
+        const res = await fetch("/api/room/" + encodeURIComponent(code) + "/kick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: userId }) });
+        const d = await res.json();
+        if (!res.ok) alert(d.error || "踢出失败");
+        roomsTick();
+      }
+      document.getElementById("room-create").addEventListener("click", createRoom);
 
       // ── 日志 ──
       let logEntries = [];

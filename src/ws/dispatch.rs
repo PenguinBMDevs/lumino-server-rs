@@ -221,14 +221,22 @@ pub(crate) fn handle_auth(
     // 账号校验：仅允许已注册账户（用户名 + 密码）连接。
     // 凭据错误直接拒绝，绝不创建 User —— 未授权连接既不能进入房间，
     // 也无法收发任何业务消息。
-    if crate::auth::auth_store()
-        .verify_login(&username, password)
-        .is_none()
-    {
+    let store = crate::auth::auth_store();
+    if !store.account_exists(&username) {
         send_raw(
             reply_tx,
             &ServerMessage::Error {
-                error: "用户名或密码错误，未授权连接".into(),
+                error: "用户不存在".into(),
+            },
+            metrics,
+        );
+        return;
+    }
+    if store.verify_login(&username, password).is_none() {
+        send_raw(
+            reply_tx,
+            &ServerMessage::Error {
+                error: "密码错误".into(),
             },
             metrics,
         );

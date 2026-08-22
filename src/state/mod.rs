@@ -209,6 +209,66 @@ impl AppState {
         true
     }
 
+    /// 解散房间（房间管理）：通知并移除全部成员，再删除房间
+    pub fn delete_room(&self, code: &str) -> Result<(), String> {
+        let room = self
+            .room_by_code(code)
+            .ok_or_else(|| "房间不存在".to_string())?;
+        // 先收集成员，逐个解除全局映射并推送解散通知
+        let users: Vec<Arc<User>> = room
+            .users
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .cloned()
+            .collect();
+        for u in &users {
+            self.user_to_room.remove(&u.id);
+            send_to_user(
+                u,
+                &ServerMessage::Error {
+                    error: "房间已被管理员解散".into(),
+                },
+                &self.metrics,
+            );
+        }
+        room.users
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        self.rooms.remove(code);
+        self.metrics.rooms_current.fetch_sub(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// 将用户移出房间（踢人）：移除其房间成员身份，并通知其余成员及其本人
+    pub fn kick_user(&self, code: &str, user_id: &str) -> Result<(), String> {
+        let room = self
+            .room_by_code(code)
+            .ok_or_else(|| "房间不存在".to_string())?;
+        let user = {
+            let g = room.users.read().unwrap_or_else(|p| p.into_inner());
+            g.get(user_id).cloned()
+        }
+        .ok_or_else(|| "用户不在该房间".to_string())?;
+        room.remove_user(user_id);
+        self.user_to_room.remove(user_id);
+        broadcast_to_room(
+            &room,
+            &ServerMessage::UserLeft { user_id },
+            Some(user_id),
+            &self.metrics,
+        );
+        send_to_user(
+            &user,
+            &ServerMessage::Error {
+                error: "你已被移出房间".into(),
+            },
+            &self.metrics,
+        );
+        Ok(())
+    }
+
     /// 用户所在房间
     pub fn room_of(&self, user: &Arc<User>) -> Option<Arc<Room>> {
         self.user_to_room

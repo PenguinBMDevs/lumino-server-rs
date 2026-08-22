@@ -214,6 +214,16 @@ impl AuthStore {
             .map(|a| a.role.clone())
     }
 
+    /// 账户是否存在（仅按用户名判定，不校验密码）
+    pub fn account_exists(&self, username: &str) -> bool {
+        self.store
+            .lock()
+            .unwrap()
+            .accounts
+            .iter()
+            .any(|a| a.username == username)
+    }
+
     /// 列出所有账户（不含密码哈希）
     pub fn list_accounts(&self) -> Vec<AccountInfo> {
         self.store
