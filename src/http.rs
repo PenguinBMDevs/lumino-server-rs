@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
@@ -74,15 +74,22 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/info", get(info))
         .route("/metrics", get(metrics_json))
         // ── 认证相关 ──
+        .route("/", get(index))
         .route("/login", get(login_html))
+        .route("/dashboard", get(dashboard_html))
         .route("/change-password", get(change_password_html))
         .route("/logout", get(logout))
         .route("/api/auth/login", post(login_api))
         .route("/api/auth/change-password", post(change_password_api))
         .route("/api/auth/me", get(auth_me))
-        // ── 受保护的管理面板（需登录）──
-        .route("/monitor", get(monitor_html))
-        .route("/logs", get(logs_html))
+        // ── 受保护的控制台（需登录；/monitor、/logs 统一进入 dashboard）──
+        .route("/monitor", get(dashboard_html))
+        .route("/logs", get(dashboard_html))
+        // ── 用户管理（仅管理员）──
+        .route("/api/users", get(users_list).post(create_user))
+        .route("/api/users/{username}", delete(delete_user))
+        .route("/api/users/{username}/reset", post(reset_password))
+        .route("/api/users/{username}/role", post(set_role))
         .route("/api/room/create", post(create_room_api))
         .route("/api/room/{code}/info", get(room_info_api))
         .with_state(state)
@@ -186,30 +193,23 @@ fn num_cpus() -> usize {
     })
 }
 
-/// GET /monitor —— 受保护，未登录跳转 /login
-async fn monitor_html(headers: HeaderMap) -> impl IntoResponse {
-    if crate::auth::auth_store()
-        .session_from_headers(&headers, "full")
-        .is_none()
-    {
-        return redirect("/login").into_response();
+/// GET / —— 未登录跳 /login；改密中跳 /change-password；否则进 /dashboard
+async fn index(headers: HeaderMap) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    if store.session_from_headers(&headers, "full").is_some() {
+        return redirect("/dashboard").into_response();
     }
-    (
-        cors_headers(),
-        [
-            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        include_str!("../assets/monitor.html"),
-    )
-        .into_response()
+    if store.session_from_headers(&headers, "pwchange").is_some() {
+        return redirect("/change-password").into_response();
+    }
+    redirect("/login").into_response()
 }
 
-/// GET /logs —— 受保护，未登录跳转 /login
-async fn logs_html(headers: HeaderMap) -> impl IntoResponse {
-    if crate::auth::auth_store()
-        .session_from_headers(&headers, "full")
-        .is_none()
+/// GET /dashboard | /monitor | /logs —— 受保护的控制台外壳（未登录跳 /login）
+async fn dashboard_html(headers: HeaderMap) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    if store.session_from_headers(&headers, "full").is_none()
+        && store.session_from_headers(&headers, "pwchange").is_none()
     {
         return redirect("/login").into_response();
     }
@@ -217,9 +217,9 @@ async fn logs_html(headers: HeaderMap) -> impl IntoResponse {
         cors_headers(),
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-cache"),
+            (header::CACHE_CONTROL, "no-store"),
         ],
-        include_str!("../assets/logs.html"),
+        include_str!("../assets/dashboard.html"),
     )
         .into_response()
 }
@@ -348,13 +348,19 @@ async fn logout(headers: HeaderMap) -> impl IntoResponse {
     (status, h)
 }
 
-/// GET /api/auth/me —— 返回当前登录态（前端据此决定跳转）
+/// GET /api/auth/me —— 返回当前登录态（含角色，前端据此渲染侧栏与跳转）
 async fn auth_me(headers: HeaderMap) -> impl IntoResponse {
     let store = crate::auth::auth_store();
     if let Some(c) = store.session_from_headers(&headers, "full") {
         return (
             cors_headers(),
-            Json(json!({ "authenticated": true, "scope": c.scope, "username": c.sub })),
+            Json(json!({
+                "authenticated": true,
+                "scope": c.scope,
+                "role": c.role,
+                "username": c.sub,
+                "requires_change": store.requires_change(&c.sub)
+            })),
         );
     }
     if let Some(c) = store.session_from_headers(&headers, "pwchange") {
@@ -363,15 +369,16 @@ async fn auth_me(headers: HeaderMap) -> impl IntoResponse {
             Json(json!({
                 "authenticated": true,
                 "scope": c.scope,
-                "requires_change": true,
-                "username": c.sub
+                "role": c.role,
+                "username": c.sub,
+                "requires_change": true
             })),
         );
     }
     (cors_headers(), Json(json!({ "authenticated": false })))
 }
 
-/// POST /api/auth/login —— 校验密码并签发会话
+/// POST /api/auth/login —— 校验用户名/密码并签发会话
 async fn login_api(headers: HeaderMap, Json(payload): Json<Value>) -> impl IntoResponse {
     let store = crate::auth::auth_store();
     let key = client_key(&headers);
@@ -390,13 +397,27 @@ async fn login_api(headers: HeaderMap, Json(payload): Json<Value>) -> impl IntoR
         );
     }
 
+    let username = payload
+        .get("username")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let password = payload
         .get("password")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
 
-    if !store.verify_password(&password) {
+    if username.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            cors_headers(),
+            Json(json!({ "success": false, "error": "请输入用户名" })),
+        );
+    }
+
+    let Some(role) = store.verify_login(&username, &password) else {
         store.record_fail(&key);
         let rem = store.lock_remaining(&key);
         return (
@@ -408,12 +429,12 @@ async fn login_api(headers: HeaderMap, Json(payload): Json<Value>) -> impl IntoR
                 "lock_seconds": rem
             })),
         );
-    }
+    };
 
     store.record_ok(&key);
-    let requires = store.requires_change();
+    let requires = store.requires_change(&username);
     let scope = if requires { "pwchange" } else { "full" };
-    let token = store.sign_session(scope);
+    let token = store.sign_session(scope, &username, &role);
     let max_age = if requires { 900 } else { 43_200 };
 
     let mut h = cors_headers();
@@ -424,23 +445,29 @@ async fn login_api(headers: HeaderMap, Json(payload): Json<Value>) -> impl IntoR
     (
         StatusCode::OK,
         h,
-        Json(json!({ "success": true, "requires_change": requires })),
+        Json(json!({
+            "success": true,
+            "requires_change": requires,
+            "role": role,
+            "username": username
+        })),
     )
 }
 
-/// POST /api/auth/change-password —— 校验当前密码 + 强度策略后更新
+/// POST /api/auth/change-password —— 校验当前密码 + 强度策略后更新（自改）
 async fn change_password_api(headers: HeaderMap, Json(payload): Json<Value>) -> impl IntoResponse {
     let store = crate::auth::auth_store();
     let key = client_key(&headers);
 
     // 必须持有有效的"仅改密"会话
-    if store.session_from_headers(&headers, "pwchange").is_none() {
+    let Some(claims) = store.session_from_headers(&headers, "pwchange") else {
         return (
             StatusCode::UNAUTHORIZED,
             cors_headers(),
             Json(json!({ "success": false, "error": "会话已过期，请重新登录" })),
         );
-    }
+    };
+    let username = claims.sub.clone();
 
     let current = payload
         .get("current_password")
@@ -454,7 +481,7 @@ async fn change_password_api(headers: HeaderMap, Json(payload): Json<Value>) -> 
         .to_string();
 
     // 再次校验当前密码（纵深防御：即便拿到改密令牌也需知道原密码）
-    if !store.verify_password(&current) {
+    if store.verify_login(&username, &current).is_none() {
         store.record_fail(&key);
         return (
             StatusCode::UNAUTHORIZED,
@@ -463,11 +490,11 @@ async fn change_password_api(headers: HeaderMap, Json(payload): Json<Value>) -> 
         );
     }
 
-    match store.change_password(&current, &new) {
+    match store.change_own_password(&username, &current, &new) {
         Ok(()) => {
             store.record_ok(&key);
             // 改密成功后签发完整会话
-            let token = store.sign_session("full");
+            let token = store.sign_session("full", &username, &claims.role);
             let mut h = cors_headers();
             h.insert(
                 header::SET_COOKIE,
@@ -475,6 +502,137 @@ async fn change_password_api(headers: HeaderMap, Json(payload): Json<Value>) -> 
             );
             (StatusCode::OK, h, Json(json!({ "success": true })))
         }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            cors_headers(),
+            Json(json!({ "success": false, "error": e })),
+        ),
+    }
+}
+
+// ── 用户管理（仅管理员）──
+
+/// GET /api/users —— 列出全部账户（不含密码）
+async fn users_list(headers: HeaderMap) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    let Some(claims) = store.session_from_headers(&headers, "full") else {
+        return (StatusCode::UNAUTHORIZED, cors_headers(), Json(json!({ "error": "未登录" })));
+    };
+    if claims.role != crate::auth::ROLE_ADMIN {
+        return (StatusCode::FORBIDDEN, cors_headers(), Json(json!({ "error": "权限不足" })));
+    }
+    (
+        StatusCode::OK,
+        cors_headers(),
+        Json(json!({ "accounts": store.list_accounts() })),
+    )
+}
+
+/// POST /api/users —— 新增账户
+async fn create_user(headers: HeaderMap, Json(payload): Json<Value>) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    let Some(claims) = store.session_from_headers(&headers, "full") else {
+        return (StatusCode::UNAUTHORIZED, cors_headers(), Json(json!({ "success": false, "error": "未登录" })));
+    };
+    if claims.role != crate::auth::ROLE_ADMIN {
+        return (StatusCode::FORBIDDEN, cors_headers(), Json(json!({ "success": false, "error": "权限不足" })));
+    }
+    let username = payload
+        .get("username")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let password = payload
+        .get("password")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let role = payload
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("user")
+        .to_string();
+    match store.add_account(&claims.role, &username, &password, &role) {
+        Ok(()) => (StatusCode::OK, cors_headers(), Json(json!({ "success": true }))),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            cors_headers(),
+            Json(json!({ "success": false, "error": e })),
+        ),
+    }
+}
+
+/// DELETE /api/users/{username} —— 删除账户
+async fn delete_user(headers: HeaderMap, Path(username): Path<String>) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    let Some(claims) = store.session_from_headers(&headers, "full") else {
+        return (StatusCode::UNAUTHORIZED, cors_headers(), Json(json!({ "success": false, "error": "未登录" })));
+    };
+    if claims.role != crate::auth::ROLE_ADMIN {
+        return (StatusCode::FORBIDDEN, cors_headers(), Json(json!({ "success": false, "error": "权限不足" })));
+    }
+    match store.remove_account(&claims.sub, &username) {
+        Ok(()) => (StatusCode::OK, cors_headers(), Json(json!({ "success": true }))),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            cors_headers(),
+            Json(json!({ "success": false, "error": e })),
+        ),
+    }
+}
+
+/// POST /api/users/{username}/reset —— 管理员重置某账户密码
+async fn reset_password(
+    headers: HeaderMap,
+    Path(username): Path<String>,
+    Json(payload): Json<Value>,
+) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    let Some(claims) = store.session_from_headers(&headers, "full") else {
+        return (StatusCode::UNAUTHORIZED, cors_headers(), Json(json!({ "success": false, "error": "未登录" })));
+    };
+    if claims.role != crate::auth::ROLE_ADMIN {
+        return (StatusCode::FORBIDDEN, cors_headers(), Json(json!({ "success": false, "error": "权限不足" })));
+    }
+    let new = payload
+        .get("new_password")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    match store.reset_password(&claims.role, &username, &new) {
+        Ok(()) => (StatusCode::OK, cors_headers(), Json(json!({ "success": true }))),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            cors_headers(),
+            Json(json!({ "success": false, "error": e })),
+        ),
+    }
+}
+
+/// POST /api/users/{username}/role —— 管理员修改某账户角色（禁止修改自己）
+async fn set_role(
+    headers: HeaderMap,
+    Path(username): Path<String>,
+    Json(payload): Json<Value>,
+) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    let Some(claims) = store.session_from_headers(&headers, "full") else {
+        return (StatusCode::UNAUTHORIZED, cors_headers(), Json(json!({ "success": false, "error": "未登录" })));
+    };
+    if claims.role != crate::auth::ROLE_ADMIN {
+        return (StatusCode::FORBIDDEN, cors_headers(), Json(json!({ "success": false, "error": "权限不足" })));
+    }
+    if username == claims.sub {
+        return (StatusCode::BAD_REQUEST, cors_headers(), Json(json!({ "success": false, "error": "不能修改自己的角色，请退出后用其他管理员账户操作" })));
+    }
+    let new_role = payload
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    match store.set_role(&claims.role, &username, &new_role) {
+        Ok(()) => (StatusCode::OK, cors_headers(), Json(json!({ "success": true }))),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             cors_headers(),
