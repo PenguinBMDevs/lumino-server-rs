@@ -86,9 +86,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/auth/change-username", post(change_username_api))
         .route("/api/auth/register", post(register_api))
         .route("/api/auth/me", get(auth_me))
-        // ── 受保护的控制台（需登录；/monitor、/logs 统一进入 dashboard）──
+        // ── 受保护的控制台（需登录；/monitor、/logs、/rooms 统一进入 dashboard）──
         .route("/monitor", get(dashboard_html))
         .route("/logs", get(dashboard_html))
+        .route("/rooms", get(dashboard_html))
         // ── 用户管理（仅管理员）──
         .route("/api/users", get(users_list).post(create_user))
         .route("/api/users/{username}", delete(delete_user))
@@ -101,6 +102,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/settings/turnstile", get(turnstile_get).post(turnstile_set))
         .route("/api/room/create", post(create_room_api))
         .route("/api/room/{code}/info", get(room_info_api))
+        .route("/api/rooms", get(rooms_api))
         .with_state(state)
 }
 
@@ -373,6 +375,62 @@ async fn room_info_api(
             Json(json!({ "error": "Room not found" })),
         ),
     }
+}
+
+/// GET /api/rooms — 房间管理监控面板数据源：列出所有活跃房间及其成员（内部用户）。
+/// 任何已登录用户均可访问（与 /monitor 控制台的可见性一致）。
+async fn rooms_api(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
+    let store = crate::auth::auth_store();
+    if store
+        .session_from_headers(&headers, "full")
+        .or_else(|| store.session_from_headers(&headers, "pwchange"))
+        .is_none()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            cors_headers(),
+            Json(json!({ "error": "未登录" })),
+        );
+    }
+    let mut rooms: Vec<Value> = state
+        .rooms
+        .iter()
+        .map(|e| {
+            let r = e.value();
+            let last = r
+                .project
+                .read()
+                .unwrap_or_else(|p| p.into_inner())
+                .last_modified;
+            let host = r
+                .host_id
+                .read()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .unwrap_or_default();
+            json!({
+                "id": r.id,
+                "inviteCode": r.id,
+                "name": r.name,
+                "hostId": host,
+                "userCount": r.user_count(),
+                "maxUsers": r.max_users,
+                "lastModified": last,
+                "members": r.users_info(),
+            })
+        })
+        .collect();
+    // 按最近活跃时间倒序，最活跃的房间置顶
+    rooms.sort_by(|a, b| {
+        b.get("lastModified")
+            .and_then(Value::as_u64)
+            .cmp(&a.get("lastModified").and_then(Value::as_u64))
+    });
+    (
+        StatusCode::OK,
+        cors_headers(),
+        Json(json!({ "rooms": rooms })),
+    )
 }
 
 // ───────────────────────────────────────────────────────────────────────────

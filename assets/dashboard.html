@@ -48,6 +48,10 @@
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
           日志
         </button>
+        <button data-view="rooms" class="nav-item w-full text-left px-3 py-2.5 rounded-lg border border-transparent text-slate-300 hover:bg-white/5 transition flex items-center gap-3">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z"/></svg>
+          房间管理
+        </button>
         <button data-view="users" id="nav-users" class="nav-item hidden w-full text-left px-3 py-2.5 rounded-lg border border-transparent text-slate-300 hover:bg-white/5 transition flex items-center gap-3">
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           用户管理
@@ -126,6 +130,17 @@
             <div id="logContainer" class="log-container flex-1 overflow-auto rounded-xl bg-slate-900/60 border border-white/10 p-3 font-mono text-xs space-y-0.5"></div>
             <div id="statusBar" class="mt-2 text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white flex justify-between"><span id="connectionStatus">正在连接...</span><span id="logCount">0 条日志</span></div>
           </div>
+        </section>
+
+        <!-- 房间管理（监控面板） -->
+        <section id="view-rooms" class="view">
+          <div class="flex flex-wrap items-center gap-3 mb-4">
+            <h3 class="text-lg font-semibold text-white">活跃房间</h3>
+            <span class="text-xs text-slate-500" id="rooms-updated"></span>
+            <button id="rooms-refresh" class="ml-auto px-3 py-1.5 rounded-lg bg-slate-700/50 hover:bg-slate-700 text-slate-200">立即刷新</button>
+          </div>
+          <div id="rooms-empty" class="hidden text-sm text-slate-500 py-10 text-center rounded-xl bg-slate-900/40 border border-white/10">当前没有活跃房间。</div>
+          <div class="space-y-4" id="rooms-list"></div>
         </section>
 
         <!-- 用户管理 -->
@@ -224,7 +239,8 @@
       let session = null;       // {username, role}
       let monitorStarted = false, monitorTimer = null;
       let logsStarted = false, ws = null;
-      const TITLES = { home: "概览", monitor: "监控", logs: "日志", users: "用户管理", password: "修改密码", turnstile: "验证设置" };
+      let roomsTimer = null;
+      const TITLES = { home: "概览", monitor: "监控", logs: "日志", rooms: "房间管理", users: "用户管理", password: "修改密码", turnstile: "验证设置" };
 
       // ── 启动：鉴权检查 + 初始视图 ──
       (async function boot() {
@@ -267,9 +283,11 @@
         if (name === "password") initPassword();
         if (name === "turnstile") initTurnstile();
         if (name === "logs") { if (!logsStarted) { initLogs(); logsStarted = true; } connectLogs(); }
+        if (name === "rooms") { document.getElementById("rooms-refresh").onclick = roomsTick; roomsTick(); roomsTimer = setInterval(roomsTick, 3000); }
         // 离开日志视图时断开 WS
         if (name !== "logs" && ws) { try { ws.close(); } catch (e) {} ws = null; }
         if (name !== "monitor" && monitorTimer) { clearInterval(monitorTimer); monitorTimer = null; }
+        if (name !== "rooms" && roomsTimer) { clearInterval(roomsTimer); roomsTimer = null; }
         if (name === "monitor") { monitorTick(); monitorTimer = setInterval(monitorTick, 1000); }
       }
 
@@ -318,6 +336,44 @@
           drawSpark("rateChart", h.msgIn, "#ef4444", "rgba(239,68,68,0.13)");
           drawSpark("memChart", h.mem, "#a855f7", "rgba(168,85,247,0.13)");
           drawSpark("cpuChart", h.cpu, "#f97316", "rgba(249,115,22,0.13)");
+        }).catch(() => {});
+      }
+
+      // ── 房间管理（监控）──
+      function escapeHtml(t) { const d = document.createElement("div"); d.textContent = t == null ? "" : t; return d.innerHTML; }
+      function fmtTime(ms) { if (!ms) return "—"; try { return new Date(ms).toLocaleString(); } catch (e) { return "—"; } }
+      function roomsTick() {
+        fetch("/api/rooms").then(r => r.json()).then(d => {
+          const list = d.rooms || [];
+          document.getElementById("rooms-updated").textContent = "更新于 " + new Date().toLocaleTimeString();
+          const empty = document.getElementById("rooms-empty");
+          const wrap = document.getElementById("rooms-list");
+          if (!list.length) { empty.classList.remove("hidden"); wrap.innerHTML = ""; return; }
+          empty.classList.add("hidden");
+          wrap.innerHTML = list.map(r => {
+            const members = r.members || [];
+            const memberHtml = members.length
+              ? members.map(m => {
+                  const hostBadge = m.isHost ? '<span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">房主</span>' : "";
+                  const dot = '<span class="inline-block w-2 h-2 rounded-full mr-1" style="background:' + (m.color || "#888") + '"></span>';
+                  return '<span class="inline-flex items-center mr-2 mb-1 px-2 py-1 rounded-lg bg-slate-800/60 border border-white/10 text-xs text-slate-200">' + dot + escapeHtml(m.username) + hostBadge + "</span>";
+                }).join("")
+              : '<span class="text-xs text-slate-500">（无成员）</span>';
+            return (
+              '<div class="rounded-xl bg-slate-900/60 border border-white/10 p-4">' +
+                '<div class="flex items-center justify-between mb-2 gap-3">' +
+                  '<div class="font-semibold text-white truncate">' + escapeHtml(r.name) + "</div>" +
+                  '<div class="text-xs text-slate-500 shrink-0">邀请码 <code class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">' + escapeHtml(r.inviteCode) + "</code></div>" +
+                "</div>" +
+                '<div class="flex items-center gap-4 text-sm text-slate-400 mb-3">' +
+                  '<span>人数 <b class="text-slate-100 tabular-nums">' + (r.userCount || 0) + "</b> / " + (r.maxUsers || 0) + "</span>" +
+                  '<span>内部用户 <b class="text-slate-100 tabular-nums">' + members.length + "</b></span>" +
+                  '<span class="text-xs">最近活跃 ' + fmtTime(r.lastModified) + "</span>" +
+                "</div>" +
+                '<div class="flex flex-wrap">' + memberHtml + "</div>" +
+              "</div>"
+            );
+          }).join("");
         }).catch(() => {});
       }
 
