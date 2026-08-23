@@ -57,7 +57,7 @@ fn bench_broadcast(c: &mut Criterion) {
     let op = NoteBatchOperation {
         action: NoteAction::Add,
         notes: vec![SyncNote {
-            id: "n1".into(),
+            id: 1,
             tick: 960.0,
             key: 60,
             length: 480.0,

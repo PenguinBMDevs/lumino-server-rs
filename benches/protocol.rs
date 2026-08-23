@@ -17,7 +17,7 @@ fn note_batch_json(n: usize) -> String {
     let notes: Vec<Value> = (0..n)
         .map(|i| {
             json!({
-                "id": format!("note-{i}"),
+                "id": i as u64,
                 "tick": 960.0, "key": 60, "length": 480.0,
                 "velocity": 100, "channel": 0, "trackIndex": 0
             })
@@ -36,7 +36,7 @@ fn note_batch_op(n: usize) -> NoteBatchOperation {
         action: NoteAction::Add,
         notes: (0..n)
             .map(|i| SyncNote {
-                id: format!("note-{i}"),
+                id: i as u64,
                 tick: 960.0,
                 key: 60,
                 length: 480.0,
@@ -115,6 +115,8 @@ fn bench_serialize(c: &mut Criterion) {
                     host_id: "u1",
                     user_count: 10,
                     max_users: 10,
+                    project_name: "协作工程",
+                    project_hash: "abc123hash",
                 }),
                 user: UserData {
                     id: "u1",

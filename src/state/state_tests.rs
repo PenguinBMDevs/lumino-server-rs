@@ -12,9 +12,9 @@ fn make_user(state: &Arc<AppState>) -> Arc<User> {
     )
 }
 
-fn note(id: &str) -> SyncNote {
+fn note(id: u64) -> SyncNote {
     SyncNote {
-        id: id.into(),
+        id,
         tick: 0.0,
         key: 60,
         length: 480.0,
@@ -79,9 +79,9 @@ fn host_transfer() {
 #[test]
 fn project_add_delete() {
     let mut p = ProjectState::new();
-    p.apply(&mut op(NoteAction::Add, vec![note("n1"), note("n2")]), "u1");
+    p.apply(&mut op(NoteAction::Add, vec![note(1), note(2)]), "u1");
     assert_eq!(p.notes.len(), 2);
-    p.apply(&mut op(NoteAction::Delete, vec![note("n1")]), "u1");
+    p.apply(&mut op(NoteAction::Delete, vec![note(1)]), "u1");
     assert_eq!(p.notes.len(), 1);
     let snap = p.snapshot();
     assert_eq!(snap.notes.len(), 2); // add + delete 两条 op
@@ -90,27 +90,44 @@ fn project_add_delete() {
 #[test]
 fn project_paste_regenerates_id() {
     let mut p = ProjectState::new();
-    let mut paste = op(NoteAction::Paste, vec![note("orig-1")]);
+    let mut paste = op(NoteAction::Paste, vec![note(999)]);
     paste.tick_offset = Some(960.0);
     paste.key_offset = Some(12);
     paste.target_track = Some(2);
-    let old_id = paste.notes[0].id.clone();
+    let old_id = paste.notes[0].id;
     p.apply(&mut paste, "u1");
-    let new_id = &paste.notes[0].id;
-    assert_ne!(new_id, &old_id);
+    let new_id = paste.notes[0].id;
+    assert_ne!(new_id, old_id);
+    assert_eq!(new_id, 1, "服务端 paste id 从 1 开始自增");
     assert_eq!(p.notes.len(), 1);
-    assert!(p.notes.contains_key(new_id.as_str()));
-    let n = p.notes.get(new_id.as_str()).unwrap();
+    assert!(p.notes.contains_key(&new_id));
+    let n = p.notes.get(&new_id).expect("paste 后的音符应在快照中");
     assert_eq!(n.tick, 960.0);
     assert_eq!(n.key, 72);
     assert_eq!(n.track_index, 2);
+}
+
+/// paste id 计数器必须单调自增，多次 paste 不能互相覆盖
+#[test]
+fn project_paste_id_monotonic() {
+    let mut p = ProjectState::new();
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let mut paste = op(NoteAction::Paste, vec![note(999)]);
+        paste.target_track = Some(0);
+        p.apply(&mut paste, "u1");
+        ids.push(paste.notes[0].id);
+    }
+    assert_eq!(ids, vec![1, 2, 3]);
+    assert_eq!(p.notes.len(), 3, "三次 paste 应产生三个独立音符");
+    assert_eq!(p.next_paste_id, 4);
 }
 
 #[test]
 fn project_snapshot_after_truncate() {
     let mut p = ProjectState::new();
     for i in 0..(MAX_OPS_LOG + 10) {
-        let mut op = op(NoteAction::Add, vec![note(&format!("n{i}"))]);
+        let mut op = op(NoteAction::Add, vec![note(i as u64)]);
         op.timestamp = i as u64;
         p.apply(&mut op, "u1");
     }
@@ -124,12 +141,12 @@ fn project_snapshot_after_truncate() {
 #[test]
 fn project_move() {
     let mut p = ProjectState::new();
-    p.apply(&mut op(NoteAction::Add, vec![note("n1")]), "u1");
-    let mut mv = op(NoteAction::Move, vec![note("n1")]);
+    p.apply(&mut op(NoteAction::Add, vec![note(1)]), "u1");
+    let mut mv = op(NoteAction::Move, vec![note(1)]);
     mv.tick_offset = Some(480.0);
     mv.key_offset = Some(2);
     p.apply(&mut mv, "u1");
-    let n = p.notes.get("n1").unwrap();
+    let n = p.notes.get(&1).expect("move 后音符 1 应存在");
     assert_eq!(n.tick, 480.0);
     assert_eq!(n.key, 62);
 }

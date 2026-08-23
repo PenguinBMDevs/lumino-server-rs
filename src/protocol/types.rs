@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncNote {
-    pub id: String,
+    /// 音符 ID（wire 协议为 JSON 数字，与客户端 `u64` 一致）
+    pub id: u64,
     pub tick: f32,
     pub key: u16,
     pub length: f32,
@@ -96,7 +97,7 @@ mod tests {
         let op = NoteBatchOperation {
             action: NoteAction::Add,
             notes: vec![SyncNote {
-                id: "n1".into(),
+                id: 1,
                 tick: 960.0,
                 key: 60,
                 length: 480.0,
@@ -111,8 +112,14 @@ mod tests {
             timestamp: 1700000000000,
         };
         let json = serde_json::to_string(&op).unwrap();
+        // wire 协议红线：id 必须序列化为 JSON 数字，不能是字符串
+        assert!(
+            json.contains(r#""id":1"#),
+            "id 必须是数字，实际 JSON: {json}"
+        );
         let back: NoteBatchOperation = serde_json::from_str(&json).unwrap();
         assert_eq!(back.action, NoteAction::Add);
+        assert_eq!(back.notes[0].id, 1);
         assert_eq!(back.notes[0].track_index, 0);
         assert!(back.tick_offset.is_none(), "None 字段应被跳过");
     }

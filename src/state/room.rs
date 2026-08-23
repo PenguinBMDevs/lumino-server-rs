@@ -10,7 +10,7 @@ use super::user::User;
 use crate::protocol::{
     NoteAction, NoteBatchOperation, ProjectStateSnapshot, RoomInfo, SyncNote, UserInfo, ViewState,
 };
-use crate::util::{generate_id, now_ms};
+use crate::util::now_ms;
 
 /// 每房间最大协作用户数（与 TS 版一致）
 pub const MAX_USERS_PER_ROOM: usize = 10;
@@ -20,7 +20,7 @@ pub const MAX_OPS_LOG: usize = 500;
 /// 项目状态（每房间一份）
 pub struct ProjectState {
     /// 音符快照：note_id → note（供 fullSync 合成 + 操作应用）
-    pub(crate) notes: HashMap<String, SyncNote>,
+    pub(crate) notes: HashMap<u64, SyncNote>,
     /// 操作日志（delta，供客户端重放）
     pub(crate) ops: VecDeque<NoteBatchOperation>,
     /// 操作日志是否被截断过（截断后 fullSync 必须发快照）
@@ -29,6 +29,8 @@ pub struct ProjectState {
     pub view_state: ViewState,
     pub last_modified: u64,
     pub modified_by: Option<String>,
+    /// paste 操作重新分配 note id 的自增计数器（服务端权威，单调递增）
+    pub(crate) next_paste_id: u64,
 }
 
 impl ProjectState {
@@ -40,6 +42,7 @@ impl ProjectState {
             view_state: ViewState::default(),
             last_modified: now_ms(),
             modified_by: None,
+            next_paste_id: 1,
         }
     }
 
@@ -48,7 +51,7 @@ impl ProjectState {
         match op.action {
             NoteAction::Add | NoteAction::Update => {
                 for n in &op.notes {
-                    self.notes.insert(n.id.clone(), n.clone());
+                    self.notes.insert(n.id, n.clone());
                 }
             }
             NoteAction::Delete => {
@@ -72,11 +75,12 @@ impl ProjectState {
                 let key_off = op.key_offset.unwrap_or(0) as i32;
                 let target = op.target_track.unwrap_or(0);
                 for n in &mut op.notes {
-                    n.id = generate_id();
+                    n.id = self.next_paste_id;
+                    self.next_paste_id = self.next_paste_id.wrapping_add(1);
                     n.tick += tick_off;
                     n.key = (n.key as i32 + key_off).max(0) as u16;
                     n.track_index = target;
-                    self.notes.insert(n.id.clone(), n.clone());
+                    self.notes.insert(n.id, n.clone());
                 }
             }
         }

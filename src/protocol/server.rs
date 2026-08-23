@@ -236,7 +236,7 @@ mod tests {
         let op = NoteBatchOperation {
             action: NoteAction::Add,
             notes: vec![crate::protocol::types::SyncNote {
-                id: "n1".into(),
+                id: 1,
                 tick: 960.0,
                 key: 60,
                 length: 480.0,
@@ -259,6 +259,9 @@ mod tests {
         assert_eq!(v["type"], "noteBatchUpdate");
         assert_eq!(v["userId"], "u1");
         assert_eq!(v["operation"]["action"], "add");
+        // id 必须是 JSON 数字（客户端按 u64 解析）
+        assert_eq!(v["operation"]["notes"][0]["id"], 1);
+        assert!(v["operation"]["notes"][0]["id"].is_u64());
         assert_eq!(v["operation"]["notes"][0]["trackIndex"], 0);
     }
 

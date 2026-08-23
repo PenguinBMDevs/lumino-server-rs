@@ -12,6 +12,37 @@ use tokio_tungstenite::tungstenite::Message;
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+/// 集成测试统一测试密码（满足密码强度策略：长度 ≥12 + 至少三类字符）
+const TEST_PASSWORD: &str = "CompatTest1234!";
+
+static AUTH_INIT: std::sync::Once = std::sync::Once::new();
+
+/// 测试辅助：初始化认证模块并注册测试账户。
+///
+/// WS 认证要求「已注册账户 + 正确密码」（见 `ws::dispatch::handle_auth`），
+/// 未初始化 `auth` 模块时 `auth_store()` 会 panic，因此集成测试必须先初始化。
+/// 配置目录指向临时目录，避免把测试账户写进仓库真实的 `config/credentials.enc`。
+/// 账户名须为 3-32 位 ASCII 字母/数字/下划线（见 `AuthStore::register`）。
+fn ensure_accounts(names: &[&str]) {
+    AUTH_INIT.call_once(|| {
+        let dir = std::env::temp_dir().join(format!("lumino-compat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("创建临时配置目录失败");
+        // SAFETY: 仅在 Once 内设置一次，且早于任何读取该环境变量的代码
+        unsafe { std::env::set_var("LUMINO_CONFIG_DIR", &dir) };
+        lumino_server_rs::auth::init().expect("认证模块初始化失败");
+    });
+    let store = lumino_server_rs::auth::auth_store();
+    for n in names {
+        // 账户已存在时返回 Err（多用例并行属正常情况），忽略即可
+        let _ = store.register(n, TEST_PASSWORD);
+    }
+}
+
+/// 构造带密码的 auth 消息
+fn auth_msg(username: &str) -> Value {
+    json!({"type":"auth","username":username,"password":TEST_PASSWORD})
+}
+
 /// 启动服务器，返回端口
 async fn start_server() -> u16 {
     let state = AppState::new();
@@ -67,10 +98,11 @@ async fn wait_for(ws: &mut WsStream, msg_type: &str) -> Value {
 
 #[tokio::test]
 async fn auth_flow_matches_client_protocol() {
+    ensure_accounts(&["compat_xiaoming"]);
     let port = start_server().await;
     let mut ws = connect(port, None).await;
 
-    send_json(&mut ws, json!({"type":"auth","username":"小明"})).await;
+    send_json(&mut ws, auth_msg("compat_xiaoming")).await;
     let resp = wait_for(&mut ws, "authenticated").await;
 
     // 客户端 ServerMessage::Authenticated 期望的字段
@@ -79,7 +111,7 @@ async fn auth_flow_matches_client_protocol() {
     assert_eq!(resp["users"].as_array().unwrap().len(), 0);
     // UserData: {id, username, flatten extra}
     assert!(resp["user"]["id"].as_str().is_some());
-    assert_eq!(resp["user"]["username"], "小明");
+    assert_eq!(resp["user"]["username"], "compat_xiaoming");
     // extra 包含 color / isHost（客户端 UserData flatten 收集）
     assert!(resp["user"]["color"].as_str().unwrap().starts_with('#'));
     assert_eq!(resp["user"]["isHost"], false);
@@ -101,10 +133,11 @@ async fn auth_flow_matches_client_protocol() {
 
 #[tokio::test]
 async fn auth_with_room_param_auto_join() {
+    ensure_accounts(&["compat_host", "compat_member2"]);
     let port = start_server().await;
     let mut ws = connect(port, Some("TESTROOM")).await;
 
-    send_json(&mut ws, json!({"type":"auth","username":"房主"})).await;
+    send_json(&mut ws, auth_msg("compat_host")).await;
     let resp = wait_for(&mut ws, "authenticated").await;
 
     // AuthRoomInfo 字段完整性
@@ -119,20 +152,21 @@ async fn auth_with_room_param_auto_join() {
 
     // 第二个用户加入 → 第一个用户收到 userJoined
     let mut ws2 = connect(port, Some("TESTROOM")).await;
-    send_json(&mut ws2, json!({"type":"auth","username":"成员2"})).await;
+    send_json(&mut ws2, auth_msg("compat_member2")).await;
     let resp2 = wait_for(&mut ws2, "authenticated").await;
     assert_eq!(resp2["room"]["userCount"], 2);
 
     let joined = wait_for(&mut ws, "userJoined").await;
-    assert_eq!(joined["user"]["username"], "成员2");
+    assert_eq!(joined["user"]["username"], "compat_member2");
     assert_eq!(joined["user"]["isHost"], false);
 }
 
 #[tokio::test]
 async fn create_join_room_full_flow() {
+    ensure_accounts(&["compat_user_a", "compat_user_b"]);
     let port = start_server().await;
     let mut ws1 = connect(port, None).await;
-    send_json(&mut ws1, json!({"type":"auth","username":"用户A"})).await;
+    send_json(&mut ws1, auth_msg("compat_user_a")).await;
     wait_for(&mut ws1, "authenticated").await;
 
     // 创建房间
@@ -143,7 +177,7 @@ async fn create_join_room_full_flow() {
 
     // 用户 B 加入
     let mut ws2 = connect(port, None).await;
-    send_json(&mut ws2, json!({"type":"auth","username":"用户B"})).await;
+    send_json(&mut ws2, auth_msg("compat_user_b")).await;
     wait_for(&mut ws2, "authenticated").await;
     send_json(&mut ws2, json!({"type":"joinRoom","inviteCode":invite})).await;
     let joined = wait_for(&mut ws2, "roomJoined").await;
@@ -154,7 +188,7 @@ async fn create_join_room_full_flow() {
 
     // A 收到 userJoined
     let notice = wait_for(&mut ws1, "userJoined").await;
-    assert_eq!(notice["user"]["username"], "用户B");
+    assert_eq!(notice["user"]["username"], "compat_user_b");
 
     // B 离开 → A 收到 userLeft
     send_json(&mut ws2, json!({"type":"leaveRoom"})).await;
@@ -169,16 +203,17 @@ async fn create_join_room_full_flow() {
 
 #[tokio::test]
 async fn note_batch_broadcast_and_sync() {
+    ensure_accounts(&["compat_note_a", "compat_note_b"]);
     let port = start_server().await;
     let mut ws1 = connect(port, None).await;
-    send_json(&mut ws1, json!({"type":"auth","username":"A"})).await;
+    send_json(&mut ws1, auth_msg("compat_note_a")).await;
     wait_for(&mut ws1, "authenticated").await;
     send_json(&mut ws1, json!({"type":"createRoom","name":"房"})).await;
     let created = wait_for(&mut ws1, "roomCreated").await;
     let invite = created["room"]["inviteCode"].as_str().unwrap().to_string();
 
     let mut ws2 = connect(port, None).await;
-    send_json(&mut ws2, json!({"type":"auth","username":"B"})).await;
+    send_json(&mut ws2, auth_msg("compat_note_b")).await;
     let auth2 = wait_for(&mut ws2, "authenticated").await;
     let user_b_id = auth2["userId"].as_str().unwrap().to_string();
     send_json(&mut ws2, json!({"type":"joinRoom","inviteCode":invite})).await;
@@ -191,7 +226,7 @@ async fn note_batch_broadcast_and_sync() {
         "notes": {
             "action": "add",
             "notes": [{
-                "id": "note-1", "tick": 960.0, "key": 60, "length": 480.0,
+                "id": 1, "tick": 960.0, "key": 60, "length": 480.0,
                 "velocity": 100, "channel": 0, "trackIndex": 0
             }],
             "timestamp": 1700000000000i64,
@@ -203,7 +238,11 @@ async fn note_batch_broadcast_and_sync() {
     let update = wait_for(&mut ws1, "noteBatchUpdate").await;
     assert_eq!(update["userId"], user_b_id);
     assert_eq!(update["operation"]["action"], "add");
-    assert_eq!(update["operation"]["notes"][0]["id"], "note-1");
+    assert_eq!(update["operation"]["notes"][0]["id"], 1);
+    assert!(
+        update["operation"]["notes"][0]["id"].is_u64(),
+        "wire 协议：id 必须是数字"
+    );
     assert_eq!(update["operation"]["notes"][0]["trackIndex"], 0);
 
     // B requestSync → fullSync 包含刚才的操作
@@ -211,6 +250,6 @@ async fn note_batch_broadcast_and_sync() {
     let sync = wait_for(&mut ws2, "fullSync").await;
     let notes = sync["projectState"]["notes"].as_array().unwrap();
     assert_eq!(notes.len(), 1);
-    assert_eq!(notes[0]["notes"][0]["id"], "note-1");
+    assert_eq!(notes[0]["notes"][0]["id"], 1);
     assert_eq!(sync["users"].as_array().unwrap().len(), 2);
 }
