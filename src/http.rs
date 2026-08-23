@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
@@ -23,6 +23,11 @@ use serde_json::{json, Value};
 
 use crate::state::AppState;
 use crate::util::now_ms;
+
+/// 房间工程上传请求体上限（`.lmpj` 可能包含渲染音频，体积较大）。
+/// axum 的 `Bytes` 提取器默认 2 MiB，超出即 `length limit exceeded`，
+/// 这里放宽到 512 MiB（LAN 协作场景下足够，且仍设上限防止内存被撑爆）。
+const MAX_ROOM_PROJECT_UPLOAD: usize = 512 * 1024 * 1024;
 
 /// 进程系统资源采样器（sysinfo 实例复用，降低重复初始化的开销）
 struct SysSampler {
@@ -105,7 +110,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/room/{code}/info", get(room_info_api))
         .route("/api/room/{code}/delete", post(delete_room_api))
         .route("/api/room/{code}/kick", post(kick_user_api))
-        .route("/api/room/{code}/project", post(upload_room_project_api).get(download_room_project_api))
+        .route(
+            "/api/room/{code}/project",
+            post(upload_room_project_api).get(download_room_project_api),
+        )
+        .route_layer(DefaultBodyLimit::max(MAX_ROOM_PROJECT_UPLOAD))
         .route("/api/rooms", get(rooms_api))
         .with_state(state)
 }

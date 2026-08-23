@@ -44,6 +44,10 @@ pub struct AuthRoomInfo<'a> {
     pub host_id: &'a str,
     pub user_count: usize,
     pub max_users: usize,
+    /// 房主上传的工程名（协作工程同步用；可能为""）
+    pub project_name: &'a str,
+    /// 房主工程文件哈希（lmpj 字节哈希；joiner 据此判断是否同一工程）
+    pub project_hash: &'a str,
 }
 
 /// 认证响应中的用户数据（与客户端 `UserData` 一致：id + flatten extra）
@@ -204,6 +208,8 @@ mod tests {
                 host_id: "u1",
                 user_count: 1,
                 max_users: 10,
+                project_name: "我的工程",
+                project_hash: "abc123hash",
             }),
             user: UserData {
                 id: "u1",
@@ -217,6 +223,10 @@ mod tests {
         assert_eq!(v["type"], "authenticated");
         assert_eq!(v["userId"], "u1");
         assert_eq!(v["room"]["inviteCode"], "ABC123");
+        // B1 修复核心断言：Authenticated 内嵌的房间信息必须携带工程名与工程哈希，
+        // 否则加入方拿不到 projectHash，不会触发工程下载/同步。
+        assert_eq!(v["room"]["projectName"], "我的工程");
+        assert_eq!(v["room"]["projectHash"], "abc123hash");
         assert_eq!(v["user"]["color"], "#FF6B6B");
         assert_eq!(v["user"]["isHost"], true);
     }

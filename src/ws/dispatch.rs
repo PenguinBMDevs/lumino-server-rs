@@ -255,7 +255,6 @@ pub(crate) fn handle_auth(
     }
 
     let new_user = state.create_user(socket_id, username.clone(), reply_tx.clone());
-    tracing::debug!("[auth] 用户已创建: {username}");
     let base_ui = UserInfo {
         id: new_user.id.clone(),
         username: username.clone(),
@@ -281,6 +280,18 @@ pub(crate) fn handle_auth(
                     .unwrap_or_else(|p| p.into_inner())
                     .clone()
                     .unwrap_or_default();
+                let room_info_proj_name = room
+                    .project_name
+                    .read()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone()
+                    .unwrap_or_default();
+                let room_info_proj_hash = room
+                    .project_hash
+                    .read()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone()
+                    .unwrap_or_default();
                 let room_info = AuthRoomInfo {
                     id: &room.id,
                     invite_code: &room.id,
@@ -288,6 +299,8 @@ pub(crate) fn handle_auth(
                     host_id: &host_owned,
                     user_count: room.user_count(),
                     max_users: room.max_users,
+                    project_name: &room_info_proj_name,
+                    project_hash: &room_info_proj_hash,
                 };
                 let users = room.users_info();
                 tracing::debug!("[auth] users_info 完成: {} 人", users.len());
