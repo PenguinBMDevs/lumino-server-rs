@@ -14,6 +14,27 @@ use crate::util::now_ms;
 
 /// 每房间最大协作用户数（与 TS 版一致）
 pub const MAX_USERS_PER_ROOM: usize = 10;
+
+/// 房间生命周期策略（控制房间何时被自动回收 / 解散）
+///
+/// 与「用户在 WS 路径下即时创建瞬时房间」的旧行为兼容：`AfterLeave(0)` 即
+/// “最后一名成员离开即关闭”，保持原语义；其余模式把删除时机交给
+/// `AppState::lifetime_sweep` 后台轮询处理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoomLifetime {
+    /// 用户全部离开后 X 分钟关闭；X=0 表示“离开即关闭”（瞬时房间原行为）
+    AfterLeave(u64),
+    /// 永不自动关闭（仅房主 / 管理员手动解散才关闭）
+    Never,
+    /// 到达指定绝对时间（epoch ms）后强制解散，无论是否仍有成员在房间内
+    Timed(u64),
+}
+
+impl Default for RoomLifetime {
+    fn default() -> Self {
+        RoomLifetime::AfterLeave(0)
+    }
+}
 /// 操作日志上限：超过后丢弃最旧（fullSync 用快照兜底）
 pub const MAX_OPS_LOG: usize = 500;
 
@@ -137,6 +158,10 @@ pub struct Room {
     pub project_name: RwLock<Option<String>>,
     /// 房主工程文件的内容哈希（None 表示尚未上传）
     pub project_hash: RwLock<Option<String>>,
+    /// 房间生命周期策略（控制自动回收 / 解散时机）
+    pub(crate) lifetime: RwLock<RoomLifetime>,
+    /// 房间变为空（最后一名成员离开）的时间戳；用于“离开后延迟关闭”计时
+    pub(crate) empty_since: RwLock<Option<u64>>,
 }
 
 impl Room {
@@ -150,6 +175,8 @@ impl Room {
             max_users: MAX_USERS_PER_ROOM,
             project_name: RwLock::new(None),
             project_hash: RwLock::new(None),
+            lifetime: RwLock::new(RoomLifetime::AfterLeave(0)),
+            empty_since: RwLock::new(None),
         });
         if let Some(host) = host {
             room.add_user(host);
@@ -228,5 +255,47 @@ impl Room {
             .project_hash
             .write()
             .unwrap_or_else(|p| p.into_inner()) = hash;
+    }
+
+    // ── 生命周期策略访问器（供 AppState 调度删除时机）──
+
+    /// 设置房间生命周期策略（预创建 / 管理后台调用）
+    pub(crate) fn set_lifetime(&self, lifetime: RoomLifetime) {
+        *self
+            .lifetime
+            .write()
+            .unwrap_or_else(|p| p.into_inner()) = lifetime;
+    }
+
+    /// 读取当前生命周期策略（Copy 类型，直接返回）
+    pub(crate) fn lifetime(&self) -> RoomLifetime {
+        *self.lifetime.read().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// 房间被占用（有成员加入）时清空空置计时
+    pub(crate) fn mark_occupied(&self) {
+        *self
+            .empty_since
+            .write()
+            .unwrap_or_else(|p| p.into_inner()) = None;
+    }
+
+    /// 房间变空时记录空置起点（仅在尚未记录时写入，避免重复刷新计时）
+    pub(crate) fn mark_emptied(&self) {
+        let mut g = self
+            .empty_since
+            .write()
+            .unwrap_or_else(|p| p.into_inner());
+        if g.is_none() {
+            *g = Some(now_ms());
+        }
+    }
+
+    /// 读取空置起点（None 表示从未空置 / 当前有人）
+    pub(crate) fn empty_since(&self) -> Option<u64> {
+        *self
+            .empty_since
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
     }
 }

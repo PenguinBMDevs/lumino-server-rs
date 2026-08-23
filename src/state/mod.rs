@@ -16,7 +16,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 
-pub use room::{ProjectState, Room, MAX_OPS_LOG, MAX_USERS_PER_ROOM};
+pub use room::{ProjectState, Room, RoomLifetime, MAX_OPS_LOG, MAX_USERS_PER_ROOM};
 pub use user::User;
 
 use crate::metrics::{Metrics, Sampler};
@@ -83,15 +83,25 @@ impl AppState {
             let room = self.rooms.get(&rid).map(|r| Arc::clone(&r));
             if let Some(room) = room {
                 room.remove_user(&user.id);
-                if room.user_count() == 0 {
+                // 空房间是否立即删除取决于生命周期策略：
+                // - AfterLeave(0)：即时删除（瞬时房间原行为）
+                // - 其余模式：交由 lifetime_sweep 后台轮询处理（可能延迟 / 永不 / 定时）
+                if self.should_delete_now_if_empty(&room) {
                     delete_room_project_file(&rid);
                     self.rooms.remove(&rid);
                     self.metrics.rooms_current.fetch_sub(1, Ordering::Relaxed);
+                } else if room.user_count() == 0 {
+                    room.mark_emptied();
                 }
             }
         }
         self.users.remove(&user.id);
         self.metrics.users_current.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// 房间变空后是否应立即删除：仅 `AfterLeave(0)` 瞬时房间走原行为。
+    fn should_delete_now_if_empty(&self, room: &Arc<Room>) -> bool {
+        room.user_count() == 0 && matches!(room.lifetime(), RoomLifetime::AfterLeave(0))
     }
 
     /// 获取或创建房间（URL ?roomId= 路径，与 TS 版 getOrCreateRoom 一致）
@@ -121,6 +131,7 @@ impl AppState {
             }
         }
         room.add_user(user);
+        room.mark_occupied();
         self.user_to_room.insert(user.id.clone(), room.id.clone());
         Ok(room)
     }
@@ -148,6 +159,7 @@ impl AppState {
         );
         self.rooms.insert(code, Arc::clone(&room));
         self.metrics.rooms_current.fetch_add(1, Ordering::Relaxed);
+        room.mark_occupied();
         self.user_to_room.insert(user.id.clone(), room.id.clone());
         Ok(room)
     }
@@ -164,17 +176,26 @@ impl AppState {
         }
         self.leave_room(user);
         room.add_user(user);
+        room.mark_occupied();
         self.user_to_room.insert(user.id.clone(), room.id.clone());
         Ok(room)
     }
 
-    /// 预创建房间（HTTP API 通道，等待第一个 WS 用户加入成为房主）
+    /// 预创建房间（HTTP API 通道，等待第一个 WS 用户加入成为房主）；
+    /// 默认 `AfterLeave(0)` 瞬时效语义，与旧调用方兼容。
     pub fn create_room_api(&self, name: String) -> Arc<Room> {
+        self.create_room_api_with(name, RoomLifetime::AfterLeave(0))
+    }
+
+    /// 预创建房间（带生命周期策略）：供控制台“手动创建房间”使用，
+    /// 可附带“用户离开后 X 分钟关闭 / 永不关闭 / 定时关闭”策略。
+    pub fn create_room_api_with(&self, name: String, lifetime: RoomLifetime) -> Arc<Room> {
         let mut code = generate_invite_code();
         while self.rooms.contains_key(&code) {
             code = generate_invite_code();
         }
         let room = Room::new(code.clone(), name, None);
+        room.set_lifetime(lifetime);
         self.rooms.insert(code, Arc::clone(&room));
         self.metrics.rooms_current.fetch_add(1, Ordering::Relaxed);
         room
@@ -192,9 +213,14 @@ impl AppState {
 
         let remaining = room.user_count();
         if remaining == 0 {
-            delete_room_project_file(&rid);
-            self.rooms.remove(&rid);
-            self.metrics.rooms_current.fetch_sub(1, Ordering::Relaxed);
+            if self.should_delete_now_if_empty(&room) {
+                delete_room_project_file(&rid);
+                self.rooms.remove(&rid);
+                self.metrics.rooms_current.fetch_sub(1, Ordering::Relaxed);
+            } else {
+                // 延迟关闭 / 永不关闭 / 定时关闭：记录空置起点，交给 lifetime_sweep
+                room.mark_emptied();
+            }
         } else {
             // 房主离开 → 移交给第一个剩余用户
             let mut host = room.host_id.write().unwrap_or_else(|p| p.into_inner());
@@ -270,6 +296,16 @@ impl AppState {
             },
             &self.metrics,
         );
+        // 踢人后房间若变空，删除时机同样取决于生命周期策略
+        if room.user_count() == 0 {
+            if self.should_delete_now_if_empty(&room) {
+                delete_room_project_file(code);
+                self.rooms.remove(code);
+                self.metrics.rooms_current.fetch_sub(1, Ordering::Relaxed);
+            } else {
+                room.mark_emptied();
+            }
+        }
         Ok(())
     }
 
@@ -285,7 +321,8 @@ impl AppState {
         self.rooms.get(code).map(|r| Arc::clone(&r))
     }
 
-    /// 清理不活跃的空房间
+    /// 清理不活跃的空房间（仅回收“离开即关闭”的瞬时房间；
+    /// 带自定义生命周期策略的房间交给 `lifetime_sweep` 处理，避免双重回收）
     pub fn cleanup_inactive(&self, max_idle_ms: u64) -> usize {
         let now = now_ms();
         let mut cleaned = 0;
@@ -293,7 +330,10 @@ impl AppState {
             .rooms
             .iter()
             .filter(|e| {
-                e.user_count() == 0
+                let transient =
+                    matches!(e.lifetime(), RoomLifetime::AfterLeave(0));
+                transient
+                    && e.user_count() == 0
                     && now
                         - e.project
                             .read()
@@ -307,6 +347,64 @@ impl AppState {
             delete_room_project_file(&id);
             if self.rooms.remove(&id).is_some() {
                 self.metrics.rooms_current.fetch_sub(1, Ordering::Relaxed);
+                cleaned += 1;
+            }
+        }
+        cleaned
+    }
+
+    /// 生命周期回收：处理“用户离开后延迟关闭 / 永不关闭（不删）/ 定时关闭”房间。
+    ///
+    /// 设计：先遍历收集待删除房间 code（DashMap `iter` 持有 shard 读锁，期间
+    /// 不得对同一 map 执行 `remove` 写操作，否则同线程重入死锁），遍历结束后再删除。
+    ///
+    /// - `AfterLeave(0)`：兜底清理仍在 map 中的空瞬时房间（正常路径已在离开时即时删除）。
+    /// - `AfterLeave(m>0)`：空房间且空置时长 ≥ m 分钟 → 删除。
+    /// - `Never`：跳过（仅手动解散）。
+    /// - `Timed(at)`：当前时间 ≥ at → 强制解散（可能仍有成员，需通知并移出）。
+    ///
+    /// 返回本次删除的房间数。
+    pub fn lifetime_sweep(&self) -> usize {
+        let now = now_ms();
+        let mut delete_empty: Vec<String> = Vec::new();
+        let mut delete_force: Vec<String> = Vec::new();
+        for e in self.rooms.iter() {
+            let room = e.value();
+            match room.lifetime() {
+                RoomLifetime::Never => {}
+                RoomLifetime::AfterLeave(0) => {
+                    if room.user_count() == 0 {
+                        delete_empty.push(e.key().clone());
+                    }
+                }
+                RoomLifetime::AfterLeave(min) => {
+                    if room.user_count() == 0 {
+                        if let Some(since) = room.empty_since() {
+                            if now.saturating_sub(since) >= min * 60_000 {
+                                delete_empty.push(e.key().clone());
+                            }
+                        }
+                    }
+                }
+                RoomLifetime::Timed(at) => {
+                    if now >= at {
+                        delete_force.push(e.key().clone());
+                    }
+                }
+            }
+        }
+
+        let mut cleaned = 0;
+        for code in delete_empty {
+            delete_room_project_file(&code);
+            if self.rooms.remove(&code).is_some() {
+                self.metrics.rooms_current.fetch_sub(1, Ordering::Relaxed);
+                cleaned += 1;
+            }
+        }
+        for code in delete_force {
+            // 定时关闭：房间可能仍有成员，需要通知并解散（delete_room 已处理计数）
+            if self.delete_room(&code).is_ok() {
                 cleaned += 1;
             }
         }

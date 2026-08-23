@@ -140,13 +140,60 @@
             <h3 class="text-lg font-semibold text-white">活跃房间</h3>
             <span class="text-xs text-slate-500" id="rooms-updated"></span>
             <button id="rooms-refresh" class="px-3 py-1.5 rounded-lg bg-slate-700/50 hover:bg-slate-700 text-slate-200">立即刷新</button>
-            <div class="ml-auto flex items-center gap-2">
-              <input id="room-name-input" placeholder="新房间名称" class="bg-slate-900/70 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50">
-              <button id="room-create" class="px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-sm">创建房间</button>
+            <div class="ml-auto">
+              <button id="room-create-open" class="px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-sm">创建房间</button>
             </div>
           </div>
           <div id="rooms-empty" class="hidden text-sm text-slate-500 py-10 text-center rounded-xl bg-slate-900/40 border border-white/10">当前没有活跃房间。</div>
           <div class="space-y-4" id="rooms-list"></div>
+
+          <!-- 创建房间弹窗（含预存文件上传 + 存在时间设置） -->
+          <div id="create-room-modal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="w-full max-w-lg rounded-2xl border border-white/10 bg-slate-900 p-6 shadow-2xl">
+              <div class="flex items-center justify-between mb-5">
+                <h3 class="text-lg font-semibold text-white">创建房间</h3>
+                <button id="create-room-cancel" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+              </div>
+
+              <label class="block text-sm text-slate-300 mb-2">房间名称</label>
+              <input id="room-name-input" placeholder="新房间名称" class="w-full rounded-lg bg-slate-800/70 border border-white/10 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50 mb-4">
+
+              <label class="block text-sm text-slate-300 mb-2">预存工程文件（可选，.lmpj）</label>
+              <div class="flex items-center gap-3 mb-1">
+                <label class="cursor-pointer px-3 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-700 text-sm text-slate-200 border border-white/10">
+                  <span id="room-file-label">选择文件</span>
+                  <input id="room-file-input" type="file" accept=".lmpj,application/json" class="hidden">
+                </label>
+                <span id="room-file-name" class="text-xs text-slate-500 truncate"></span>
+              </div>
+              <p class="text-xs text-slate-500 mb-4">上传后成员加入时可直接同步该工程（服务端预存）。</p>
+
+              <label class="block text-sm text-slate-300 mb-2">存在时间</label>
+              <select id="room-lifetime-mode" class="w-full rounded-lg bg-slate-800/70 border border-white/10 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50">
+                <option value="after_leave">用户离开后关闭</option>
+                <option value="never">永不关闭</option>
+                <option value="timed">定时关闭</option>
+              </select>
+
+              <div id="room-lifetime-minutes-wrap" class="mt-3 flex items-center gap-2">
+                <span class="text-sm text-slate-400">用户离开后</span>
+                <input id="room-lifetime-minutes" type="number" min="0" value="30" class="w-24 rounded-lg bg-slate-800/70 border border-white/10 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50">
+                <span class="text-sm text-slate-400">分钟关闭（0 = 离开即关）</span>
+              </div>
+
+              <div id="room-lifetime-at-wrap" class="mt-3 hidden">
+                <label class="block text-xs text-slate-500 mb-1">关闭时间（按服务器本地时间）</label>
+                <input id="room-lifetime-at" type="datetime-local" class="w-full rounded-lg bg-slate-800/70 border border-white/10 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50">
+              </div>
+
+              <div id="create-room-msg" class="text-xs mt-3 hidden"></div>
+
+              <div class="flex justify-end gap-2 mt-5">
+                <button id="create-room-cancel2" class="px-4 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-700 text-slate-200 text-sm">取消</button>
+                <button id="room-create" class="px-4 py-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-medium">创建</button>
+              </div>
+            </div>
+          </div>
         </section>
 
         <!-- 用户管理 -->
@@ -410,19 +457,99 @@
                   '<span>内部用户 <b class="text-slate-100 tabular-nums">' + members.length + "</b></span>" +
                   '<span class="text-xs">最近活跃 ' + fmtTime(r.lastModified) + "</span>" +
                 "</div>" +
+                '<div class="mb-3">' + describeLifetime(r) + "</div>" +
                 '<div class="flex flex-wrap">' + memberHtml + "</div>" +
               "</div>"
             );
           }).join("");
         }).catch(() => {});
       }
+      // 计算文件 SHA-256 十六进制（用于工程哈希元数据，失败则回退为空串）
+      async function fileSha256Hex(file) {
+        try {
+          const buf = await file.arrayBuffer();
+          const digest = await crypto.subtle.digest("SHA-256", buf);
+          return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+        } catch (e) { return ""; }
+      }
+
+      function openCreateRoom() {
+        document.getElementById("create-room-modal").classList.remove("hidden");
+        document.getElementById("create-room-msg").classList.add("hidden");
+        refreshLifetimeOptions();
+      }
+      function closeCreateRoom() {
+        document.getElementById("create-room-modal").classList.add("hidden");
+      }
+      function refreshLifetimeOptions() {
+        const mode = document.getElementById("room-lifetime-mode").value;
+        document.getElementById("room-lifetime-minutes-wrap").classList.toggle("hidden", mode !== "after_leave");
+        document.getElementById("room-lifetime-at-wrap").classList.toggle("hidden", mode !== "timed");
+      }
+
       async function createRoom() {
-        const input = document.getElementById("room-name-input");
-        const name = input.value.trim() || ("房间 " + new Date().toLocaleTimeString());
-        const res = await fetch("/api/room/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+        const nameInput = document.getElementById("room-name-input");
+        const name = nameInput.value.trim() || ("房间 " + new Date().toLocaleTimeString());
+        const mode = document.getElementById("room-lifetime-mode").value;
+        let lifetime;
+        if (mode === "never") {
+          lifetime = { mode: "never" };
+        } else if (mode === "timed") {
+          const atVal = document.getElementById("room-lifetime-at").value;
+          const at = atVal ? new Date(atVal).getTime() : 0;
+          if (!at || isNaN(at)) { alert("请选择定时关闭时间"); return; }
+          lifetime = { mode: "timed", at };
+        } else {
+          const minutes = Math.max(0, parseInt(document.getElementById("room-lifetime-minutes").value || "0", 10) || 0);
+          lifetime = { mode: "after_leave", minutes };
+        }
+
+        const res = await fetch("/api/room/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, lifetime }),
+        });
         const d = await res.json();
-        if (res.ok && d.success) { input.value = ""; roomsTick(); }
-        else alert(d.error || "创建失败");
+        if (!res.ok || !d.success) { alert(d.error || "创建失败"); return; }
+
+        // 预存文件上传：创建成功后立即上传工程文件（无需等待成员加入）
+        const fileInput = document.getElementById("room-file-input");
+        if (fileInput.files && fileInput.files.length) {
+          const file = fileInput.files[0];
+          const hash = await fileSha256Hex(file);
+          const up = await fetch(
+            "/api/room/" + encodeURIComponent(d.room.inviteCode) + "/project?name=" +
+              encodeURIComponent(file.name) + "&hash=" + encodeURIComponent(hash),
+            { method: "POST", body: file }
+          );
+          if (!up.ok) {
+            const ed = await up.json().catch(() => ({}));
+            alert("房间已创建，但工程文件上传失败：" + (ed.error || up.status));
+          }
+        }
+
+        nameInput.value = "";
+        fileInput.value = "";
+        document.getElementById("room-file-name").textContent = "";
+        closeCreateRoom();
+        roomsTick();
+      }
+
+      // ── 房间生命周期描述（房间管理卡片展示）──
+      function describeLifetime(r) {
+        const lt = r.lifetime;
+        if (!lt) return '<span class="text-xs px-2 py-0.5 rounded bg-slate-700/50 text-slate-300">瞬时（离开即关闭）</span>';
+        if (lt.mode === "never") return '<span class="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">常驻 · 永不关闭</span>';
+        if (lt.mode === "timed") return '<span class="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-300">定时关闭 · ' + fmtTime(lt.at) + "</span>";
+        const m = lt.minutes || 0;
+        if (r.userCount === 0 && r.emptySince) {
+          if (m === 0) return '<span class="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">空置 · 即将关闭</span>';
+          const left = m * 60000 - (Date.now() - r.emptySince);
+          if (left > 0) return '<span class="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">空置 · 约 ' + Math.ceil(left / 60000) + " 分钟后关闭</span>";
+          return '<span class="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">空置 · 即将关闭</span>';
+        }
+        if (m === 0) return '<span class="text-xs px-2 py-0.5 rounded bg-slate-700/50 text-slate-300">离开即关闭</span>';
+        return '<span class="text-xs px-2 py-0.5 rounded bg-slate-700/50 text-slate-300">离开后 ' + m + " 分钟关闭</span>";
       }
       async function deleteRoom(code) {
         if (!confirm("确定解散房间 " + code + "？所有成员将被移出。")) return;
@@ -438,7 +565,15 @@
         if (!res.ok) alert(d.error || "踢出失败");
         roomsTick();
       }
+      document.getElementById("room-create-open").addEventListener("click", openCreateRoom);
       document.getElementById("room-create").addEventListener("click", createRoom);
+      document.getElementById("create-room-cancel").addEventListener("click", closeCreateRoom);
+      document.getElementById("create-room-cancel2").addEventListener("click", closeCreateRoom);
+      document.getElementById("room-lifetime-mode").addEventListener("change", refreshLifetimeOptions);
+      document.getElementById("room-file-input").addEventListener("change", (e) => {
+        const f = e.target.files && e.target.files[0];
+        document.getElementById("room-file-name").textContent = f ? f.name : "";
+      });
 
       // ── 日志 ──
       let logEntries = [];

@@ -120,7 +120,7 @@ async fn async_main(config: Config, workers: usize) -> Result<(), Box<dyn std::e
     );
     log::log("info", "=================================".to_string());
 
-    // 定期清理：空房间 24h 回收
+    // 定期清理：空房间 24h 回收（仅“离开即关闭”的瞬时房间）
     let cleanup_state = Arc::clone(&state);
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30 * 60));
@@ -130,6 +130,20 @@ async fn async_main(config: Config, workers: usize) -> Result<(), Box<dyn std::e
             let cleaned = cleanup_state.cleanup_inactive(24 * 60 * 60 * 1000);
             if cleaned > 0 {
                 log::log("info", format!("清理了 {cleaned} 个不活跃房间"));
+            }
+        }
+    });
+
+    // 生命周期回收：处理“用户离开后延迟关闭 / 定时关闭”房间（10s 粒度足够分钟级计时）
+    let sweep_state = Arc::clone(&state);
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));
+        ticker.tick().await; // 跳过立即执行
+        loop {
+            ticker.tick().await;
+            let cleaned = sweep_state.lifetime_sweep();
+            if cleaned > 0 {
+                log::log("info", format!("生命周期回收了 {cleaned} 个房间"));
             }
         }
     });

@@ -21,7 +21,7 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
-use crate::state::AppState;
+use crate::state::{AppState, RoomLifetime};
 use crate::util::now_ms;
 
 /// 房间工程上传请求体上限（`.lmpj` 可能包含渲染音频，体积较大）。
@@ -308,7 +308,47 @@ async fn dashboard_html(headers: HeaderMap) -> impl IntoResponse {
         .into_response()
 }
 
+/// 从创建房间请求体解析生命周期策略（缺省按 AfterLeave(0) 瞬时房间处理）
+fn parse_lifetime(payload: &Value) -> RoomLifetime {
+    let Some(lt) = payload.get("lifetime") else {
+        return RoomLifetime::AfterLeave(0);
+    };
+    let mode = lt.get("mode").and_then(Value::as_str).unwrap_or("after_leave");
+    match mode {
+        "never" => RoomLifetime::Never,
+        "timed" => {
+            let at = lt.get("at").and_then(Value::as_u64).unwrap_or(0);
+            if at == 0 {
+                RoomLifetime::AfterLeave(0)
+            } else {
+                RoomLifetime::Timed(at)
+            }
+        }
+        _ => {
+            let minutes = lt
+                .get("minutes")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            RoomLifetime::AfterLeave(minutes)
+        }
+    }
+}
+
+/// 将生命周期策略序列化为前端可读 JSON
+fn lifetime_to_json(lt: &RoomLifetime) -> Value {
+    match lt {
+        RoomLifetime::AfterLeave(m) => json!({ "mode": "after_leave", "minutes": *m }),
+        RoomLifetime::Never => json!({ "mode": "never" }),
+        RoomLifetime::Timed(at) => json!({ "mode": "timed", "at": *at }),
+    }
+}
+
 /// POST /api/room/create — 预创建房间（HTTP 通道，供网页/客户端拿 WebSocket URL）
+///
+/// 支持附带生命周期策略 `lifetime`：
+/// - `{"mode":"after_leave","minutes":N}` 用户离开后 N 分钟关闭（N=0 即离开即关）
+/// - `{"mode":"never"}` 永不自动关闭
+/// - `{"mode":"timed","at":<epoch_ms>}` 到达指定时间后强制解散
 async fn create_room_api(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -328,9 +368,11 @@ async fn create_room_api(
         );
     }
 
+    let lifetime = parse_lifetime(&payload);
+
     // 预创建房间（无用户占用：临时 host 占位由第一个 WS 用户接管）
     tracing::debug!("[api] 调用 create_room_api: {name}");
-    let room = state.create_room_api(name);
+    let room = state.create_room_api_with(name, lifetime);
     tracing::debug!("[api] 房间已创建: {}", room.id);
 
     // 构造 WebSocket URL（优先 X-Forwarded-Proto 与 Host）
@@ -355,6 +397,7 @@ async fn create_room_api(
                 "inviteCode": room.id,
                 "name": room.name,
                 "hostId": "",
+                "lifetime": lifetime_to_json(&room.lifetime()),
             },
             "webSocketUrl": ws_url,
         })),
@@ -381,6 +424,8 @@ async fn room_info_api(
                     "maxUsers": info.max_users,
                     "projectName": info.project_name,
                     "projectHash": info.project_hash,
+                    "lifetime": lifetime_to_json(&room.lifetime()),
+                    "emptySince": room.empty_since(),
                 })),
             )
         }
@@ -559,6 +604,8 @@ async fn rooms_api(State(state): State<Arc<AppState>>, headers: HeaderMap) -> im
                 "userCount": r.user_count(),
                 "maxUsers": r.max_users,
                 "lastModified": last,
+                "lifetime": lifetime_to_json(&r.lifetime()),
+                "emptySince": r.empty_since(),
                 "members": r.users_info(),
             })
         })
@@ -1197,5 +1244,81 @@ mod tests {
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// 读取 JSON 响应体
+    async fn resp_json(resp: impl IntoResponse) -> Value {
+        let resp = resp.into_response();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_room_timed_lifetime_reflected() {
+        let state = AppState::new();
+        let body = resp_json(
+            create_room_api(
+                State(Arc::clone(&state)),
+                HeaderMap::new(),
+                Json(json!({ "name": "定时房", "lifetime": { "mode": "timed", "at": 1700000000000u64 } })),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(body["success"], true);
+        assert_eq!(body["room"]["lifetime"]["mode"], "timed");
+        assert_eq!(body["room"]["lifetime"]["at"], 1700000000000u64);
+    }
+
+    #[tokio::test]
+    async fn create_room_never_lifetime_reflected() {
+        let state = AppState::new();
+        let body = resp_json(
+            create_room_api(
+                State(Arc::clone(&state)),
+                HeaderMap::new(),
+                Json(json!({ "name": "常驻房", "lifetime": { "mode": "never" } })),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(body["success"], true);
+        assert_eq!(body["room"]["lifetime"]["mode"], "never");
+    }
+
+    #[tokio::test]
+    async fn create_room_after_leave_lifetime_reflected() {
+        let state = AppState::new();
+        let body = resp_json(
+            create_room_api(
+                State(Arc::clone(&state)),
+                HeaderMap::new(),
+                Json(json!({ "name": "延迟房", "lifetime": { "mode": "after_leave", "minutes": 15 } })),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(body["success"], true);
+        assert_eq!(body["room"]["lifetime"]["mode"], "after_leave");
+        assert_eq!(body["room"]["lifetime"]["minutes"], 15);
+    }
+
+    #[tokio::test]
+    async fn create_room_default_lifetime_is_transient() {
+        let state = AppState::new();
+        let body = resp_json(
+            create_room_api(
+                State(Arc::clone(&state)),
+                HeaderMap::new(),
+                Json(json!({ "name": "瞬时房" })),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(body["success"], true);
+        assert_eq!(body["room"]["lifetime"]["mode"], "after_leave");
+        assert_eq!(body["room"]["lifetime"]["minutes"], 0);
     }
 }

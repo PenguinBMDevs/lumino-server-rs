@@ -65,6 +65,54 @@ fn room_create_and_join() {
 }
 
 #[test]
+fn lifetime_after_leave_deletes_after_delay() {
+    let state = AppState::new();
+    let host = make_user(&state);
+    let room = state.create_room_api_with("延迟房".into(), RoomLifetime::AfterLeave(30));
+    let code = room.id.clone();
+    state.join_room(&code, &host).unwrap();
+    state.leave_room(&host);
+    // 用户离开后不应立即删除，仍有 30 分钟宽限
+    assert!(state.room_by_code(&code).is_some());
+    assert_eq!(state.lifetime_sweep(), 0, "未满宽限期不应回收");
+    // 模拟空置已超 31 分钟，下一次 sweep 应删除
+    *room.empty_since.write().unwrap() = Some(now_ms() - 31 * 60_000);
+    assert_eq!(state.lifetime_sweep(), 1);
+    assert!(state.room_by_code(&code).is_none());
+}
+
+#[test]
+fn lifetime_never_keeps_room() {
+    let state = AppState::new();
+    let host = make_user(&state);
+    let room = state.create_room_api_with("常驻房".into(), RoomLifetime::Never);
+    let code = room.id.clone();
+    state.join_room(&code, &host).unwrap();
+    state.leave_room(&host);
+    assert!(state.room_by_code(&code).is_some(), "永不关闭的房间离开后须保留");
+    assert_eq!(state.lifetime_sweep(), 0, "永不关闭不应被回收");
+}
+
+#[test]
+fn lifetime_timed_deletes_at_time() {
+    let state = AppState::new();
+    let room = state.create_room_api_with("定时房".into(), RoomLifetime::Timed(now_ms() - 1000));
+    let code = room.id.clone();
+    assert!(state.room_by_code(&code).is_some());
+    assert_eq!(state.lifetime_sweep(), 1, "到点后应强制解散");
+    assert!(state.room_by_code(&code).is_none());
+}
+
+#[test]
+fn lifetime_timed_future_keeps() {
+    let state = AppState::new();
+    let room = state.create_room_api_with("未来定时房".into(), RoomLifetime::Timed(now_ms() + 60_000));
+    let code = room.id.clone();
+    assert_eq!(state.lifetime_sweep(), 0, "未到点不应删除");
+    assert!(state.room_by_code(&code).is_some());
+}
+
+#[test]
 fn host_transfer() {
     let state = AppState::new();
     let host = make_user(&state);
