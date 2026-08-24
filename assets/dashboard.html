@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Lumino 控制台</title>
+    <link rel="icon" href="/app-icon.ico" />
     <script src="https://cdn.tailwindcss.com"></script>
 
     <!-- 主题防闪烁：在首屏绘制前根据 localStorage / 系统偏好设置 .dark -->
@@ -84,7 +85,6 @@
       .view.active { display: block !important; }
 
       .sidebar { background: var(--surface); border-right: 1px solid var(--border); }
-      .brand-logo { background: linear-gradient(135deg, var(--brand-from), var(--brand-to)); }
       .topbar { background: var(--surface); border-bottom: 1px solid var(--border); }
 
       .nav-item { color: var(--fg-muted); border: 1px solid transparent; }
@@ -175,8 +175,8 @@
     <!-- 左侧栏 -->
     <aside class="sidebar w-64 shrink-0 flex flex-col">
       <div class="px-5 py-5 border-b flex items-center gap-3" style="border-color: var(--border)">
-        <div class="brand-logo w-9 h-9 rounded-xl grid place-items-center">
-          <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+        <div class="w-9 h-9 rounded-xl grid place-items-center" style="background: var(--surface); border: 1px solid var(--border)">
+          <img src="/app-icon.ico" alt="Lumino" class="w-6 h-6" />
         </div>
         <div>
           <div class="font-semibold leading-tight" style="color: var(--fg)">Lumino 控制台</div>
@@ -185,11 +185,7 @@
       </div>
 
       <nav class="flex-1 p-3 space-y-1 text-sm" id="nav">
-        <button data-view="home" class="nav-item active w-full text-left px-3 py-2.5 rounded-lg transition flex items-center gap-3">
-          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>
-          概览
-        </button>
-        <button data-view="monitor" class="nav-item w-full text-left px-3 py-2.5 rounded-lg transition flex items-center gap-3">
+        <button data-view="monitor" class="nav-item active w-full text-left px-3 py-2.5 rounded-lg transition flex items-center gap-3">
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
           监控
         </button>
@@ -242,19 +238,8 @@
       </header>
 
       <div class="flex-1 overflow-auto p-6">
-        <!-- 概览 -->
-        <section id="view-home" class="view active">
-          <div class="card card-pad text-center py-10">
-            <div class="text-5xl mb-4">👋</div>
-            <h2 class="text-3xl font-semibold" style="color: var(--fg)">欢迎！</h2>
-            <p class="mt-3" style="color: var(--fg-muted)">您已成功登录 Lumino 控制台。</p>
-            <p class="mt-1 text-sm" style="color: var(--fg-subtle)">当前用户：<span id="home-user" style="color: var(--fg)">--</span> · 角色：<span id="home-role" style="color: var(--fg)">--</span></p>
-            <p class="mt-6 text-xs" style="color: var(--fg-subtle)">使用左侧栏切换「监控 / 日志 / 用户管理 / 修改密码」。</p>
-          </div>
-        </section>
-
         <!-- 监控 -->
-        <section id="view-monitor" class="view">
+        <section id="view-monitor" class="view active">
           <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
             <div class="card p-4 border-l-4 border-l-blue-500"><div class="text-2xl font-bold tabular-nums" id="conn-current">0</div><div class="text-xs mt-1" style="color: var(--fg-subtle)">当前连接</div></div>
             <div class="card p-4 border-l-4 border-l-emerald-500"><div class="text-2xl font-bold tabular-nums" id="room-count">0</div><div class="text-xs mt-1" style="color: var(--fg-subtle)">活跃房间</div></div>
@@ -463,7 +448,7 @@
       let monitorStarted = false, monitorTimer = null;
       let logsStarted = false, ws = null;
       let roomsTimer = null;
-      const TITLES = { home: "概览", monitor: "监控", logs: "日志", rooms: "房间管理", users: "用户管理", password: "修改密码", turnstile: "验证设置" };
+      const TITLES = { monitor: "监控", logs: "日志", rooms: "房间管理", users: "用户管理", password: "修改密码", turnstile: "验证设置" };
 
       // ── 启动：鉴权检查 + 初始视图 ──
       (async function boot() {
@@ -475,11 +460,10 @@
         } catch (e) { location.href = "/login"; return; }
 
         document.getElementById("side-user").textContent = session.username;
-        document.getElementById("home-user").textContent = session.username;
         document.getElementById("avatar").textContent = session.username[0].toUpperCase();
         const roleEl = document.getElementById("side-role");
-        if (session.role === "admin") { roleEl.innerHTML = '<span class="badge badge-admin">管理员</span>'; document.getElementById("home-role").textContent = "管理员"; }
-        else { roleEl.innerHTML = '<span class="badge badge-user">普通用户</span>'; document.getElementById("home-role").textContent = "普通用户"; }
+        if (session.role === "admin") { roleEl.innerHTML = '<span class="badge badge-admin">管理员</span>'; }
+        else { roleEl.innerHTML = '<span class="badge badge-user">普通用户</span>'; }
         if (session.role === "admin") { document.getElementById("nav-users").classList.remove("hidden"); document.getElementById("nav-turnstile").classList.remove("hidden"); }
 
         document.getElementById("clock").textContent = new Date().toLocaleString();
@@ -489,9 +473,8 @@
         document.getElementById("logout-btn").addEventListener("click", async () => { await fetch("/logout"); location.href = "/login"; });
 
         const p = location.pathname;
-        let initial = "home";
-        if (p.endsWith("/monitor")) initial = "monitor";
-        else if (p.endsWith("/logs")) initial = "logs";
+        let initial = "monitor";
+        if (p.endsWith("/logs")) initial = "logs";
         showView(initial);
       })();
 
@@ -520,7 +503,23 @@
         hist = { labels: [], conn: [], rooms: [], users: [], msgIn: [], noteOps: [], mem: [], cpu: [] };
         disp = { conn: [], rooms: [], users: [], msgIn: [], noteOps: [], mem: [], cpu: [] };
       }
-      function drawSpark(id, data, color, fill) {
+      // 刻度尺辅助：把数值向上取整到「漂亮」的刻度（1/2/5×10^n）
+      function niceCeil(v) {
+        if (!(v > 0)) return 1;
+        const exp = Math.floor(Math.log10(v));
+        const base = Math.pow(10, exp);
+        const f = v / base;
+        const nf = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+        return nf * base;
+      }
+      function fmtTick(v) {
+        if (v >= 1000) { const k = v / 1000; return (k >= 10 ? Math.round(k) : k.toFixed(1)) + "k"; }
+        return (Math.round(v * 10) / 10).toString();
+      }
+      function hhmmss(d) { const p = (x) => String(x).padStart(2, "0"); return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()); }
+
+      // 自绘折线 + 坐标轴刻度尺（网格 + Y 数值刻度 + X 时间刻度），颜色跟随主题 CSS 变量
+      function drawSpark(id, data, color, fill, labels) {
         const cv = document.getElementById(id);
         if (!cv) return;
         const dpr = window.devicePixelRatio || 1;
@@ -531,17 +530,53 @@
         const ctx = cv.getContext("2d");
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, w, h);
-        if (data.length < 2) return;
-        const max = Math.max(1, ...data);
-        const padT = 8, padB = 8;
-        ctx.beginPath();
-        data.forEach((v, i) => {
-          const x = (i / (data.length - 1)) * w;
-          const y = h - padB - (v / max) * (h - padT - padB);
-          i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-        });
-        ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
-        if (fill) { ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); }
+
+        const cs = getComputedStyle(document.documentElement);
+        const grid = (cs.getPropertyValue("--border") || "#30363d").trim();
+        const axis = (cs.getPropertyValue("--fg-subtle") || "#6e7681").trim();
+
+        const padL = 44, padR = 12, padT = 12, padB = 22;
+        const pw = Math.max(1, w - padL - padR), ph = Math.max(1, h - padT - padB);
+        const n = data.length;
+        const niceMax = niceCeil(Math.max(1, ...(n ? data : [1])));
+
+        ctx.font = "10px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+        ctx.lineWidth = 1;
+
+        // Y 轴：水平网格 + 数值刻度
+        ctx.textBaseline = "middle"; ctx.textAlign = "right";
+        const yTicks = 4;
+        for (let i = 0; i <= yTicks; i++) {
+          const val = niceMax * (i / yTicks);
+          const y = padT + ph - (val / niceMax) * ph;
+          ctx.strokeStyle = grid;
+          ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + pw, y); ctx.stroke();
+          ctx.fillStyle = axis; ctx.fillText(fmtTick(val), padL - 6, y);
+        }
+
+        // X 轴：垂直网格 + 时间刻度
+        ctx.textBaseline = "top"; ctx.textAlign = "center";
+        const xTicks = Math.max(1, Math.min(4, n - 1));
+        for (let i = 0; i <= xTicks; i++) {
+          const idx = n > 1 ? Math.round((i / xTicks) * (n - 1)) : 0;
+          const x = padL + (n > 1 ? (idx / (n - 1)) : 0) * pw;
+          ctx.strokeStyle = grid;
+          ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + ph); ctx.stroke();
+          const lab = labels && labels[idx] ? String(labels[idx]).slice(0, 5) : "";
+          ctx.fillStyle = axis; ctx.fillText(lab, x, padT + ph + 5);
+        }
+
+        // 折线
+        if (n >= 2) {
+          ctx.beginPath();
+          data.forEach((v, i) => {
+            const x = padL + (i / (n - 1)) * pw;
+            const y = padT + ph - (v / niceMax) * ph;
+            i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+          });
+          ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+          if (fill) { ctx.lineTo(padL + pw, padT + ph); ctx.lineTo(padL, padT + ph); ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); }
+        }
       }
 
       let animFrame = null;
@@ -552,10 +587,10 @@
           const h = hist[k], d = disp[k];
           for (let i = 0; i < h.length; i++) d[i] += (h[i] - d[i]) * 0.18;
         }
-        drawSpark("connChart", disp.conn, "#3b82f6", "rgba(59,130,246,0.13)");
-        drawSpark("rateChart", disp.msgIn, "#ef4444", "rgba(239,68,68,0.13)");
-        drawSpark("memChart", disp.mem, "#a855f7", "rgba(168,85,247,0.13)");
-        drawSpark("cpuChart", disp.cpu, "#f97316", "rgba(249,115,22,0.13)");
+        drawSpark("connChart", disp.conn, "#3b82f6", "rgba(59,130,246,0.13)", hist.labels);
+        drawSpark("rateChart", disp.msgIn, "#ef4444", "rgba(239,68,68,0.13)", hist.labels);
+        drawSpark("memChart", disp.mem, "#a855f7", "rgba(168,85,247,0.13)", hist.labels);
+        drawSpark("cpuChart", disp.cpu, "#f97316", "rgba(249,115,22,0.13)", hist.labels);
       }
       function startCharts() {
         if (animFrame) return;
@@ -575,7 +610,7 @@
           if (!hist) initMonitor();
           if (!disp) initMonitor();
           const h = hist, dp = disp;
-          h.labels.push(new Date().toLocaleTimeString());
+          h.labels.push(hhmmss(new Date()));
           h.conn.push(d.connections.current); h.rooms.push(d.rooms); h.users.push(d.users);
           h.msgIn.push(Math.round(d.rates.msgs_in)); h.noteOps.push(Math.round(d.rates.noteOps));
           h.mem.push(d.resources.rss_mb); h.cpu.push(d.resources.cpu_pct);

@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Lumino 控制台 · 注册</title>
+    <link rel="icon" href="/app-icon.ico" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>
 
@@ -51,7 +52,6 @@
       .alert-ok { color: var(--success); background: var(--success-soft); border-color: var(--success-soft); }
       .tx-ok { color: var(--success); } .tx-sub { color: var(--fg-subtle); } .tx-muted { color: var(--fg-muted); } .tx-fg { color: var(--fg); }
       .bar-off { background: var(--border); } .bar-weak { background: #f85149; } .bar-mid { background: #d29922; } .bar-strong { background: #3fb950; }
-      .brand-logo { background: linear-gradient(135deg, var(--brand-from), var(--brand-to)); }
       .theme-toggle { position: fixed; top: 1rem; right: 1rem; display: inline-flex; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
       .theme-toggle button { background: transparent; border: none; color: var(--fg-muted); padding: 0.35rem 0.6rem; font-size: 0.9rem; cursor: pointer; line-height: 1; }
       .theme-toggle button.active { background: var(--accent-soft); color: var(--accent); }
@@ -66,11 +66,7 @@
 
     <main class="relative w-full max-w-md">
       <div class="flex flex-col items-center mb-6">
-        <div class="brand-logo w-16 h-16 rounded-2xl grid place-items-center">
-          <svg xmlns="http://www.w3.org/2000/svg" class="w-9 h-9 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M19 8v6M22 11h-6"></path>
-          </svg>
-        </div>
+        <img src="/app-icon.ico" alt="Lumino" class="w-16 h-16 rounded-2xl" />
         <h1 class="mt-4 text-2xl font-semibold tracking-tight" style="color: var(--fg)">创建账户</h1>
         <p class="text-sm tx-muted">新账户默认为普通用户</p>
       </div>

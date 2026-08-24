@@ -87,6 +87,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/change-password", get(change_password_html))
         .route("/register", get(register_html))
         .route("/logout", get(logout))
+        // ── 品牌图标（二进制，编译期嵌入；favicon 与 <img> 共用）──
+        .route("/app-icon.ico", get(app_icon))
+        .route("/favicon.ico", get(app_icon))
         .route("/api/auth/login", post(login_api))
         .route("/api/auth/change-password", post(change_password_api))
         .route("/api/auth/change-username", post(change_username_api))
@@ -304,6 +307,18 @@ async fn dashboard_html(headers: HeaderMap) -> impl IntoResponse {
             (header::CACHE_CONTROL, "no-store"),
         ],
         include_str!("../assets/dashboard.html"),
+    )
+        .into_response()
+}
+
+/// `GET /app-icon.ico` 与 `GET /favicon.ico` —— 返回编译期嵌入的品牌图标。
+///
+/// 图标为二进制 `.ico`，无法用 `include_str!` 嵌入，故用 `include_bytes!` 并以
+/// `image/x-icon` 提供；`.gitattributes` 已将其标记为二进制，避免被 Git 当文本做 diff/换行转换。
+async fn app_icon() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/x-icon")],
+        Bytes::from_static(include_bytes!("../assets/app-icon.ico")),
     )
         .into_response()
 }
