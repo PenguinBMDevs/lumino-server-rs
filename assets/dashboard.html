@@ -6,115 +6,267 @@
     <title>Lumino 控制台</title>
     <script src="https://cdn.tailwindcss.com"></script>
 
+    <!-- 主题防闪烁：在首屏绘制前根据 localStorage / 系统偏好设置 .dark -->
+    <script>
+      (function () {
+        try {
+          var m = localStorage.getItem("lumino-theme") || "auto";
+          var dark = m === "dark" || (m === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
+
     <style>
-      .grid-bg {
-        background-image:
-          linear-gradient(rgba(99, 102, 241, 0.05) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(99, 102, 241, 0.05) 1px, transparent 1px);
-        background-size: 38px 38px;
+      /* ── 设计令牌：GitHub / Gitee 风格现代化后台配色（亮 / 暗自动切换）── */
+      :root {
+        --canvas: #f6f8fa;          /* 页面底色 */
+        --surface: #ffffff;         /* 侧栏 / 顶栏 / 卡片 / 弹窗 */
+        --overlay: #ffffff;
+        --border: #d0d7de;
+        --border-muted: #d8dee4;
+        --fg: #1f2328;
+        --fg-muted: #656d76;
+        --fg-subtle: #6e7781;
+        --accent: #0969da;
+        --accent-soft: rgba(9, 105, 218, 0.10);
+        --accent-border: rgba(9, 105, 218, 0.40);
+        --success: #1a7f37;
+        --success-soft: rgba(26, 127, 55, 0.12);
+        --danger: #cf222e;
+        --danger-soft: rgba(207, 34, 46, 0.10);
+        --warning: #9a6700;
+        --warning-soft: rgba(154, 103, 0, 0.12);
+        --input-bg: #ffffff;
+        --input-border: #d0d7de;
+        --hover: rgba(31, 35, 40, 0.06);
+        --shadow: 0 1px 3px rgba(31, 35, 40, 0.12);
+        --brand-from: #6366f1;
+        --brand-to: #8b5cf6;
       }
-      /* 视图显隐：用 !important 压过 Tailwind 动态注入的 .flex 等同级优先级规则，
-         否则 /logs 视图的 flex 会盖掉 display:none，导致日志面板常驻、侧栏切不走 */
+      html.dark {
+        --canvas: #010409;
+        --surface: #161b22;
+        --overlay: #161b22;
+        --border: #30363d;
+        --border-muted: #21262d;
+        --fg: #e6edf3;
+        --fg-muted: #7d8590;
+        --fg-subtle: #6e7681;
+        --accent: #2f81f7;
+        --accent-soft: rgba(56, 139, 253, 0.15);
+        --accent-border: rgba(56, 139, 253, 0.50);
+        --success: #3fb950;
+        --success-soft: rgba(63, 185, 80, 0.15);
+        --danger: #f85149;
+        --danger-soft: rgba(248, 81, 73, 0.12);
+        --warning: #d29922;
+        --warning-soft: rgba(210, 153, 34, 0.15);
+        --input-bg: #0d1117;
+        --input-border: #30363d;
+        --hover: rgba(177, 186, 196, 0.08);
+        --shadow: 0 8px 24px rgba(1, 4, 9, 0.6);
+        --brand-from: #6366f1;
+        --brand-to: #8b5cf6;
+      }
+
+      * { -webkit-font-smoothing: antialiased; }
+      html, body { height: 100%; }
+      body {
+        background: var(--canvas);
+        color: var(--fg);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", "PingFang SC", "Microsoft YaHei", Helvetica, Arial, sans-serif;
+        transition: background-color 0.2s ease, color 0.2s ease;
+      }
+
+      /* 视图显隐：用 !important 压过 Tailwind 动态注入的同级优先级规则 */
       .view { display: none !important; }
       .view.active { display: block !important; }
-      .nav-item.active { background: rgba(99,102,241,0.18); color: #fff; border-color: rgba(129,140,248,0.5); }
+
+      .sidebar { background: var(--surface); border-right: 1px solid var(--border); }
+      .brand-logo { background: linear-gradient(135deg, var(--brand-from), var(--brand-to)); }
+      .topbar { background: var(--surface); border-bottom: 1px solid var(--border); }
+
+      .nav-item { color: var(--fg-muted); border: 1px solid transparent; }
+      .nav-item:hover { background: var(--hover); color: var(--fg); }
+      .nav-item.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-border); }
+
+      .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+      .card-pad { padding: 1.25rem; }
+
+      .field {
+        background: var(--input-bg);
+        border: 1px solid var(--input-border);
+        color: var(--fg);
+        border-radius: 8px;
+        padding: 0.625rem 0.875rem;
+        outline: none;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .field::placeholder { color: var(--fg-subtle); }
+      .field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+      .btn-primary {
+        background: linear-gradient(135deg, var(--brand-from), var(--brand-to));
+        color: #fff; font-weight: 600; border-radius: 10px; padding: 0.6rem 1rem;
+        transition: filter 0.15s ease, transform 0.05s ease;
+      }
+      .btn-primary:hover { filter: brightness(1.08); }
+      .btn-primary:active { transform: translateY(1px); }
+      .btn-secondary {
+        background: var(--canvas); border: 1px solid var(--border); color: var(--fg);
+        border-radius: 8px; padding: 0.4rem 0.75rem; font-size: 0.875rem; transition: background 0.15s ease;
+      }
+      .btn-secondary:hover { background: var(--hover); }
+
+      .badge { display: inline-flex; align-items: center; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 500; line-height: 1.4; }
+      .badge-admin { background: var(--accent-soft); color: var(--accent); }
+      .badge-user { background: var(--hover); color: var(--fg-muted); }
+      .badge-warn { background: var(--warning-soft); color: var(--warning); }
+      .badge-ok { background: var(--success-soft); color: var(--success); }
+      .badge-info { background: rgba(139, 92, 246, 0.15); color: #8b5cf6; }
+      .badge-neutral { background: var(--hover); color: var(--fg-muted); }
+
+      .alert { border-radius: 10px; padding: 0.5rem 0.75rem; font-size: 0.875rem; border: 1px solid transparent; }
+      .alert-error { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-soft); }
+      .alert-ok { color: var(--success); background: var(--success-soft); border-color: var(--success-soft); }
+      .alert-info { color: var(--fg-muted); background: var(--hover); border-color: var(--border); }
+      .msg-ok { color: var(--success); }
+      .msg-err { color: var(--danger); }
+
+      .status-bar { font-size: 0.75rem; padding: 0.4rem 0.75rem; border-radius: 10px; display: flex; justify-content: space-between; }
+      .st-connecting { background: var(--warning); color: #1f2328; }
+      .st-connected { background: var(--accent); color: #fff; }
+      .st-disconnected { background: var(--danger); color: #fff; }
+
       .log-container::-webkit-scrollbar { width: 8px; }
-      .log-container::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
-      /* 监控折线图自适应容器尺寸，避免画布被钳在默认 300x150 而显示不完整 */
+      .log-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+      .log-line { padding: 0.125rem 0.5rem; border-left: 2px solid transparent; }
+      .log-debug { border-color: var(--border); color: var(--fg-subtle); }
+      .log-info { border-color: var(--accent); color: var(--accent); }
+      .log-warn { border-color: var(--warning); color: var(--warning); }
+      .log-error { border-color: var(--danger); color: var(--danger); }
+
+      .bar-off { background: var(--border); }
+      .bar-weak { background: #f85149; }
+      .bar-mid { background: #d29922; }
+      .bar-strong { background: #3fb950; }
+
+      .chip { display: inline-flex; align-items: center; padding: 0.15rem 0.5rem; border-radius: 8px; font-size: 0.75rem; background: var(--hover); border: 1px solid var(--border); color: var(--fg); }
+      .num { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+      .btn-link { font-size: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 6px; background: var(--accent-soft); color: var(--accent); transition: filter 0.15s ease; }
+      .btn-link:hover { filter: brightness(0.95); }
+      .btn-link-danger { font-size: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 6px; background: var(--danger-soft); color: var(--danger); transition: filter 0.15s ease; }
+      .btn-link-danger:hover { filter: brightness(0.95); }
+
+      #user-rows tr { border-top: 1px solid var(--border); }
+      #user-rows tr:first-child { border-top: none; }
+
       #connChart, #rateChart, #memChart, #cpuChart { width: 100%; height: 100%; display: block; }
+
+      .theme-seg { display: inline-flex; background: var(--canvas); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+      .theme-seg button { background: transparent; border: none; color: var(--fg-muted); padding: 0.3rem 0.55rem; font-size: 0.85rem; cursor: pointer; display: inline-flex; align-items: center; line-height: 1; }
+      .theme-seg button.active { background: var(--accent-soft); color: var(--accent); }
+      .theme-seg button:hover { color: var(--fg); }
     </style>
   </head>
-  <body class="min-h-screen bg-slate-950 text-slate-200 grid-bg flex">
+
+  <body class="flex h-screen overflow-hidden">
     <!-- 左侧栏 -->
-    <aside class="w-64 shrink-0 bg-slate-900/70 backdrop-blur-xl border-r border-white/10 flex flex-col">
-      <div class="px-5 py-5 border-b border-white/10 flex items-center gap-3">
-        <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 grid place-items-center">
+    <aside class="sidebar w-64 shrink-0 flex flex-col">
+      <div class="px-5 py-5 border-b flex items-center gap-3" style="border-color: var(--border)">
+        <div class="brand-logo w-9 h-9 rounded-xl grid place-items-center">
           <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
         </div>
         <div>
-          <div class="font-semibold text-white leading-tight">Lumino 控制台</div>
-          <div class="text-xs text-slate-500">协作服务器管理</div>
+          <div class="font-semibold leading-tight" style="color: var(--fg)">Lumino 控制台</div>
+          <div class="text-xs" style="color: var(--fg-subtle)">协作服务器管理</div>
         </div>
       </div>
 
       <nav class="flex-1 p-3 space-y-1 text-sm" id="nav">
-        <button data-view="home" class="nav-item active w-full text-left px-3 py-2.5 rounded-lg border border-transparent text-slate-300 hover:bg-white/5 transition flex items-center gap-3">
+        <button data-view="home" class="nav-item active w-full text-left px-3 py-2.5 rounded-lg transition flex items-center gap-3">
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>
           概览
         </button>
-        <button data-view="monitor" class="nav-item w-full text-left px-3 py-2.5 rounded-lg border border-transparent text-slate-300 hover:bg-white/5 transition flex items-center gap-3">
+        <button data-view="monitor" class="nav-item w-full text-left px-3 py-2.5 rounded-lg transition flex items-center gap-3">
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
           监控
         </button>
-        <button data-view="logs" class="nav-item w-full text-left px-3 py-2.5 rounded-lg border border-transparent text-slate-300 hover:bg-white/5 transition flex items-center gap-3">
+        <button data-view="logs" class="nav-item w-full text-left px-3 py-2.5 rounded-lg transition flex items-center gap-3">
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
           日志
         </button>
-        <button data-view="rooms" class="nav-item w-full text-left px-3 py-2.5 rounded-lg border border-transparent text-slate-300 hover:bg-white/5 transition flex items-center gap-3">
+        <button data-view="rooms" class="nav-item w-full text-left px-3 py-2.5 rounded-lg transition flex items-center gap-3">
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z"/></svg>
           房间管理
         </button>
-        <button data-view="users" id="nav-users" class="nav-item hidden w-full text-left px-3 py-2.5 rounded-lg border border-transparent text-slate-300 hover:bg-white/5 transition flex items-center gap-3">
+        <button data-view="users" id="nav-users" class="nav-item hidden w-full text-left px-3 py-2.5 rounded-lg transition flex items-center gap-3">
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           用户管理
         </button>
-        <button data-view="turnstile" id="nav-turnstile" class="nav-item hidden w-full text-left px-3 py-2.5 rounded-lg border border-transparent text-slate-300 hover:bg-white/5 transition flex items-center gap-3">
+        <button data-view="turnstile" id="nav-turnstile" class="nav-item hidden w-full text-left px-3 py-2.5 rounded-lg transition flex items-center gap-3">
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
           验证设置
         </button>
-        <button data-view="password" class="nav-item w-full text-left px-3 py-2.5 rounded-lg border border-transparent text-slate-300 hover:bg-white/5 transition flex items-center gap-3">
+        <button data-view="password" class="nav-item w-full text-left px-3 py-2.5 rounded-lg transition flex items-center gap-3">
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           修改密码
         </button>
       </nav>
 
-      <div class="p-3 border-t border-white/10">
+      <div class="p-3 border-t" style="border-color: var(--border)">
         <div class="flex items-center gap-2 px-2 mb-2">
-          <div class="w-8 h-8 rounded-full bg-gradient-to-br from-slate-600 to-slate-800 grid place-items-center text-xs font-bold" id="avatar">A</div>
+          <div class="w-8 h-8 rounded-full grid place-items-center text-xs font-bold" id="avatar" style="background: var(--hover); color: var(--fg)">A</div>
           <div class="min-w-0">
-            <div class="text-sm text-white truncate" id="side-user">--</div>
+            <div class="text-sm truncate" id="side-user" style="color: var(--fg)">--</div>
             <div class="text-xs" id="side-role"></div>
           </div>
         </div>
-        <button id="logout-btn" class="w-full px-3 py-2 rounded-lg bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 text-sm transition">退出登录</button>
+        <button id="logout-btn" class="w-full px-3 py-2 rounded-lg text-sm transition" style="background: var(--danger-soft); color: var(--danger)">退出登录</button>
       </div>
     </aside>
 
     <!-- 主内容 -->
     <main class="flex-1 min-w-0 flex flex-col">
-      <header class="h-14 px-6 border-b border-white/10 flex items-center justify-between bg-slate-900/40 backdrop-blur">
-        <h1 class="text-lg font-semibold text-white" id="page-title">概览</h1>
-        <div class="text-xs text-slate-500" id="clock"></div>
+      <header class="topbar h-14 px-6 flex items-center justify-between">
+        <h1 class="text-lg font-semibold" id="page-title" style="color: var(--fg)">概览</h1>
+        <div class="flex items-center gap-4">
+          <div class="theme-seg" id="theme-seg" role="group" aria-label="主题">
+            <button data-theme="auto" title="跟随系统">🖥</button>
+            <button data-theme="light" title="亮色">☀</button>
+            <button data-theme="dark" title="暗色">🌙</button>
+          </div>
+          <div class="text-xs" id="clock" style="color: var(--fg-subtle)"></div>
+        </div>
       </header>
 
       <div class="flex-1 overflow-auto p-6">
         <!-- 概览 -->
         <section id="view-home" class="view active">
-          <div class="max-w-2xl">
-            <div class="rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-10 text-center">
-              <div class="text-5xl mb-4">👋</div>
-              <h2 class="text-3xl font-semibold text-white">欢迎！</h2>
-              <p class="mt-3 text-slate-400">您已成功登录 Lumino 控制台。</p>
-              <p class="mt-1 text-slate-500 text-sm">当前用户：<span id="home-user" class="text-slate-300">--</span> · 角色：<span id="home-role" class="text-slate-300">--</span></p>
-              <p class="mt-6 text-xs text-slate-600">使用左侧栏切换「监控 / 日志 / 用户管理 / 修改密码」。</p>
-            </div>
+          <div class="card card-pad text-center py-10">
+            <div class="text-5xl mb-4">👋</div>
+            <h2 class="text-3xl font-semibold" style="color: var(--fg)">欢迎！</h2>
+            <p class="mt-3" style="color: var(--fg-muted)">您已成功登录 Lumino 控制台。</p>
+            <p class="mt-1 text-sm" style="color: var(--fg-subtle)">当前用户：<span id="home-user" style="color: var(--fg)">--</span> · 角色：<span id="home-role" style="color: var(--fg)">--</span></p>
+            <p class="mt-6 text-xs" style="color: var(--fg-subtle)">使用左侧栏切换「监控 / 日志 / 用户管理 / 修改密码」。</p>
           </div>
         </section>
 
         <!-- 监控 -->
         <section id="view-monitor" class="view">
           <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-            <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4 border-l-4 border-l-blue-500"><div class="text-2xl font-bold tabular-nums" id="conn-current">0</div><div class="text-xs text-slate-500 mt-1">当前连接</div></div>
-            <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4 border-l-4 border-l-emerald-500"><div class="text-2xl font-bold tabular-nums" id="room-count">0</div><div class="text-xs text-slate-500 mt-1">活跃房间</div></div>
-            <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4 border-l-4 border-l-amber-500"><div class="text-2xl font-bold tabular-nums" id="user-count">0</div><div class="text-xs text-slate-500 mt-1">在线用户</div></div>
-            <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4 border-l-4 border-l-purple-500"><div class="text-2xl font-bold tabular-nums" id="rss">0</div><div class="text-xs text-slate-500 mt-1">内存 RSS (MB)</div></div>
-            <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4 border-l-4 border-l-orange-500"><div class="text-2xl font-bold tabular-nums" id="cpu-pct">0</div><div class="text-xs text-slate-500 mt-1">CPU 占用 (%)</div></div>
+            <div class="card p-4 border-l-4 border-l-blue-500"><div class="text-2xl font-bold tabular-nums" id="conn-current">0</div><div class="text-xs mt-1" style="color: var(--fg-subtle)">当前连接</div></div>
+            <div class="card p-4 border-l-4 border-l-emerald-500"><div class="text-2xl font-bold tabular-nums" id="room-count">0</div><div class="text-xs mt-1" style="color: var(--fg-subtle)">活跃房间</div></div>
+            <div class="card p-4 border-l-4 border-l-amber-500"><div class="text-2xl font-bold tabular-nums" id="user-count">0</div><div class="text-xs mt-1" style="color: var(--fg-subtle)">在线用户</div></div>
+            <div class="card p-4 border-l-4 border-l-purple-500"><div class="text-2xl font-bold tabular-nums" id="rss">0</div><div class="text-xs mt-1" style="color: var(--fg-subtle)">内存 RSS (MB)</div></div>
+            <div class="card p-4 border-l-4 border-l-orange-500"><div class="text-2xl font-bold tabular-nums" id="cpu-pct">0</div><div class="text-xs mt-1" style="color: var(--fg-subtle)">CPU 占用 (%)</div></div>
           </div>
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4"><h3 class="text-sm text-slate-400 mb-2">连接 / 房间 / 用户趋势</h3><div class="relative h-48"><canvas id="connChart"></canvas></div></div>
-            <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4"><h3 class="text-sm text-slate-400 mb-2">消息 / 音符操作速率</h3><div class="relative h-48"><canvas id="rateChart"></canvas></div></div>
-            <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4"><h3 class="text-sm text-slate-400 mb-2">内存 RSS (MB)</h3><div class="relative h-48"><canvas id="memChart"></canvas></div></div>
-            <div class="rounded-xl bg-slate-900/60 border border-white/10 p-4"><h3 class="text-sm text-slate-400 mb-2">CPU 占用 (%)</h3><div class="relative h-48"><canvas id="cpuChart"></canvas></div></div>
+            <div class="card p-4"><h3 class="text-sm mb-2" style="color: var(--fg-muted)">连接 / 房间 / 用户趋势</h3><div class="relative h-48"><canvas id="connChart"></canvas></div></div>
+            <div class="card p-4"><h3 class="text-sm mb-2" style="color: var(--fg-muted)">消息 / 音符操作速率</h3><div class="relative h-48"><canvas id="rateChart"></canvas></div></div>
+            <div class="card p-4"><h3 class="text-sm mb-2" style="color: var(--fg-muted)">内存 RSS (MB)</h3><div class="relative h-48"><canvas id="memChart"></canvas></div></div>
+            <div class="card p-4"><h3 class="text-sm mb-2" style="color: var(--fg-muted)">CPU 占用 (%)</h3><div class="relative h-48"><canvas id="cpuChart"></canvas></div></div>
           </div>
         </section>
 
@@ -122,75 +274,75 @@
         <section id="view-logs" class="view">
           <div class="flex flex-col h-[72vh]">
             <div class="flex flex-wrap items-center gap-3 mb-3 text-sm">
-              <input id="searchBox" placeholder="搜索日志..." class="bg-slate-900/70 border border-white/10 rounded-lg px-3 py-1.5 text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50" />
-              <label class="text-slate-400"><input type="checkbox" id="filterDebug" checked class="mr-1">Debug</label>
-              <label class="text-slate-400"><input type="checkbox" id="filterInfo" checked class="mr-1">Info</label>
-              <label class="text-slate-400"><input type="checkbox" id="filterWarn" checked class="mr-1">Warn</label>
-              <label class="text-slate-400"><input type="checkbox" id="filterError" checked class="mr-1">Error</label>
-              <button id="clearLogs" class="ml-auto px-3 py-1.5 rounded-lg bg-slate-700/50 hover:bg-slate-700 text-slate-200">清空</button>
+              <input id="searchBox" placeholder="搜索日志..." class="field w-64" />
+              <label style="color: var(--fg-muted)"><input type="checkbox" id="filterDebug" checked class="mr-1">Debug</label>
+              <label style="color: var(--fg-muted)"><input type="checkbox" id="filterInfo" checked class="mr-1">Info</label>
+              <label style="color: var(--fg-muted)"><input type="checkbox" id="filterWarn" checked class="mr-1">Warn</label>
+              <label style="color: var(--fg-muted)"><input type="checkbox" id="filterError" checked class="mr-1">Error</label>
+              <button id="clearLogs" class="btn-secondary ml-auto">清空</button>
             </div>
-            <div id="logContainer" class="log-container flex-1 overflow-auto rounded-xl bg-slate-900/60 border border-white/10 p-3 font-mono text-xs space-y-0.5"></div>
-            <div id="statusBar" class="mt-2 text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white flex justify-between"><span id="connectionStatus">正在连接...</span><span id="logCount">0 条日志</span></div>
+            <div id="logContainer" class="log-container card flex-1 overflow-auto p-3 font-mono text-xs space-y-0.5"></div>
+            <div id="statusBar" class="status-bar st-connecting mt-2"><span id="connectionStatus">正在连接...</span><span id="logCount">0 条日志</span></div>
           </div>
         </section>
 
-        <!-- 房间管理（监控面板） -->
+        <!-- 房间管理 -->
         <section id="view-rooms" class="view">
           <div class="flex flex-wrap items-center gap-3 mb-4">
-            <h3 class="text-lg font-semibold text-white">活跃房间</h3>
-            <span class="text-xs text-slate-500" id="rooms-updated"></span>
-            <button id="rooms-refresh" class="px-3 py-1.5 rounded-lg bg-slate-700/50 hover:bg-slate-700 text-slate-200">立即刷新</button>
+            <h3 class="text-lg font-semibold" style="color: var(--fg)">活跃房间</h3>
+            <span class="text-xs" id="rooms-updated" style="color: var(--fg-subtle)"></span>
+            <button id="rooms-refresh" class="btn-secondary">立即刷新</button>
             <div class="ml-auto">
-              <button id="room-create-open" class="px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-sm">创建房间</button>
+              <button id="room-create-open" class="btn-primary text-sm" style="padding: 0.45rem 0.9rem">创建房间</button>
             </div>
           </div>
-          <div id="rooms-empty" class="hidden text-sm text-slate-500 py-10 text-center rounded-xl bg-slate-900/40 border border-white/10">当前没有活跃房间。</div>
+          <div id="rooms-empty" class="hidden card py-10 text-center" style="color: var(--fg-muted)">当前没有活跃房间。</div>
           <div class="space-y-4" id="rooms-list"></div>
 
-          <!-- 创建房间弹窗（含预存文件上传 + 存在时间设置） -->
-          <div id="create-room-modal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-            <div class="w-full max-w-lg rounded-2xl border border-white/10 bg-slate-900 p-6 shadow-2xl">
+          <!-- 创建房间弹窗 -->
+          <div id="create-room-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background: rgba(0,0,0,0.55)">
+            <div class="card w-full max-w-lg p-6">
               <div class="flex items-center justify-between mb-5">
-                <h3 class="text-lg font-semibold text-white">创建房间</h3>
-                <button id="create-room-cancel" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+                <h3 class="text-lg font-semibold" style="color: var(--fg)">创建房间</h3>
+                <button id="create-room-cancel" class="text-2xl leading-none" style="color: var(--fg-muted)">&times;</button>
               </div>
 
-              <label class="block text-sm text-slate-300 mb-2">房间名称</label>
-              <input id="room-name-input" placeholder="新房间名称" class="w-full rounded-lg bg-slate-800/70 border border-white/10 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50 mb-4">
+              <label class="block text-sm mb-2" style="color: var(--fg-muted)">房间名称</label>
+              <input id="room-name-input" placeholder="新房间名称" class="field w-full mb-4">
 
-              <label class="block text-sm text-slate-300 mb-2">预存工程文件（可选，.lmpj）</label>
+              <label class="block text-sm mb-2" style="color: var(--fg-muted)">预存工程文件（可选，.lmpj）</label>
               <div class="flex items-center gap-3 mb-1">
-                <label class="cursor-pointer px-3 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-700 text-sm text-slate-200 border border-white/10">
+                <label class="btn-secondary cursor-pointer">
                   <span id="room-file-label">选择文件</span>
                   <input id="room-file-input" type="file" accept=".lmpj,application/json" class="hidden">
                 </label>
-                <span id="room-file-name" class="text-xs text-slate-500 truncate"></span>
+                <span id="room-file-name" class="text-xs truncate" style="color: var(--fg-subtle)"></span>
               </div>
-              <p class="text-xs text-slate-500 mb-4">上传后成员加入时可直接同步该工程（服务端预存）。</p>
+              <p class="text-xs mb-4" style="color: var(--fg-subtle)">上传后成员加入时可直接同步该工程（服务端预存）。</p>
 
-              <label class="block text-sm text-slate-300 mb-2">存在时间</label>
-              <select id="room-lifetime-mode" class="w-full rounded-lg bg-slate-800/70 border border-white/10 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50">
+              <label class="block text-sm mb-2" style="color: var(--fg-muted)">存在时间</label>
+              <select id="room-lifetime-mode" class="field w-full">
                 <option value="after_leave">用户离开后关闭</option>
                 <option value="never">永不关闭</option>
                 <option value="timed">定时关闭</option>
               </select>
 
               <div id="room-lifetime-minutes-wrap" class="mt-3 flex items-center gap-2">
-                <span class="text-sm text-slate-400">用户离开后</span>
-                <input id="room-lifetime-minutes" type="number" min="0" value="30" class="w-24 rounded-lg bg-slate-800/70 border border-white/10 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50">
-                <span class="text-sm text-slate-400">分钟关闭（0 = 离开即关）</span>
+                <span class="text-sm" style="color: var(--fg-muted)">用户离开后</span>
+                <input id="room-lifetime-minutes" type="number" min="0" value="30" class="field w-24">
+                <span class="text-sm" style="color: var(--fg-muted)">分钟关闭（0 = 离开即关）</span>
               </div>
 
               <div id="room-lifetime-at-wrap" class="mt-3 hidden">
-                <label class="block text-xs text-slate-500 mb-1">关闭时间（按服务器本地时间）</label>
-                <input id="room-lifetime-at" type="datetime-local" class="w-full rounded-lg bg-slate-800/70 border border-white/10 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50">
+                <label class="block text-xs mb-1" style="color: var(--fg-subtle)">关闭时间（按服务器本地时间）</label>
+                <input id="room-lifetime-at" type="datetime-local" class="field w-full">
               </div>
 
-              <div id="create-room-msg" class="text-xs mt-3 hidden"></div>
+              <div id="create-room-msg" class="hidden text-sm msg-err"></div>
 
               <div class="flex justify-end gap-2 mt-5">
-                <button id="create-room-cancel2" class="px-4 py-2 rounded-lg bg-slate-700/60 hover:bg-slate-700 text-slate-200 text-sm">取消</button>
-                <button id="room-create" class="px-4 py-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-medium">创建</button>
+                <button id="create-room-cancel2" class="btn-secondary">取消</button>
+                <button id="room-create" class="btn-primary">创建</button>
               </div>
             </div>
           </div>
@@ -198,88 +350,90 @@
 
         <!-- 用户管理 -->
         <section id="view-users" class="view">
-          <div class="rounded-xl bg-slate-900/60 border border-white/10 p-5 mb-5">
-            <h3 class="text-sm font-semibold text-white mb-3">新增账户</h3>
+          <div class="card card-pad mb-5">
+            <h3 class="text-sm font-semibold mb-3" style="color: var(--fg)">新增账户</h3>
             <div class="flex flex-wrap gap-3 items-end">
-              <div><label class="block text-xs text-slate-500 mb-1">用户名</label><input id="nu-name" class="bg-slate-900/70 border border-white/10 rounded-lg px-3 py-2 text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50" placeholder="3-32 位字母数字下划线"></div>
-              <div><label class="block text-xs text-slate-500 mb-1">密码（≥12位，三类字符）</label><input id="nu-pass" type="text" class="bg-slate-900/70 border border-white/10 rounded-lg px-3 py-2 text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50" placeholder="强密码"></div>
-              <div><label class="block text-xs text-slate-500 mb-1">角色</label>
-                <select id="nu-role" class="bg-slate-900/70 border border-white/10 rounded-lg px-3 py-2 text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50">
+              <div><label class="block text-xs mb-1" style="color: var(--fg-muted)">用户名</label><input id="nu-name" class="field" style="width: 16rem" placeholder="3-32 位字母数字下划线"></div>
+              <div><label class="block text-xs mb-1" style="color: var(--fg-muted)">密码（≥12位，三类字符）</label><input id="nu-pass" type="text" class="field" style="width: 16rem" placeholder="强密码"></div>
+              <div><label class="block text-xs mb-1" style="color: var(--fg-muted)">角色</label>
+                <select id="nu-role" class="field" style="width: 10rem">
                   <option value="user">普通用户</option>
                   <option value="admin">管理员</option>
                 </select>
               </div>
-              <button id="nu-add" class="px-4 py-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-medium">添加</button>
+              <button id="nu-add" class="btn-primary" style="padding: 0.5rem 1rem">添加</button>
             </div>
-            <div id="nu-msg" class="text-xs mt-2 hidden"></div>
+            <div id="nu-msg" class="hidden text-sm"></div>
           </div>
 
-          <div class="rounded-xl bg-slate-900/60 border border-white/10 overflow-hidden">
+          <div class="card overflow-hidden">
             <table class="w-full text-sm">
-              <thead class="bg-slate-800/50 text-slate-400 text-left">
-                <tr><th class="px-4 py-3">用户名</th><th class="px-4 py-3">角色</th><th class="px-4 py-3">状态</th><th class="px-4 py-3">创建时间</th><th class="px-4 py-3 text-right">操作</th></tr>
+              <thead style="background: var(--canvas); color: var(--fg-muted)">
+                <tr><th class="px-4 py-3 text-left">用户名</th><th class="px-4 py-3 text-left">角色</th><th class="px-4 py-3 text-left">状态</th><th class="px-4 py-3 text-left">创建时间</th><th class="px-4 py-3 text-right">操作</th></tr>
               </thead>
-              <tbody id="user-rows" class="divide-y divide-white/5"></tbody>
+              <tbody id="user-rows"></tbody>
             </table>
           </div>
         </section>
 
-        <!-- 修改密码 -->
+        <!-- 修改密码（铺满整个屏幕） -->
         <section id="view-password" class="view">
-          <div class="max-w-md rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-7">
-            <h3 class="text-lg font-semibold text-white mb-5">修改我的密码</h3>
-            <label class="block text-sm text-slate-300 mb-2">当前密码</label>
-            <input id="cp-current" type="password" class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white outline-none focus:ring-2 focus:ring-indigo-500/60" placeholder="当前密码">
-            <label class="block text-sm text-slate-300 mt-4 mb-2">新密码</label>
-            <input id="cp-new" type="password" class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white outline-none focus:ring-2 focus:ring-indigo-500/60" placeholder="至少 12 位">
-            <div class="mt-3 flex gap-1">
-              <div class="h-1.5 flex-1 rounded bg-slate-700" id="cp-b0"></div>
-              <div class="h-1.5 flex-1 rounded bg-slate-700" id="cp-b1"></div>
-              <div class="h-1.5 flex-1 rounded bg-slate-700" id="cp-b2"></div>
-              <div class="h-1.5 flex-1 rounded bg-slate-700" id="cp-b3"></div>
+          <div class="grid gap-5 lg:grid-cols-2">
+            <div class="card card-pad">
+              <h3 class="text-lg font-semibold mb-5" style="color: var(--fg)">修改我的密码</h3>
+              <label class="block text-sm mb-2" style="color: var(--fg-muted)">当前密码</label>
+              <input id="cp-current" type="password" class="field w-full" placeholder="当前密码">
+              <label class="block text-sm mt-4 mb-2" style="color: var(--fg-muted)">新密码</label>
+              <input id="cp-new" type="password" class="field w-full" placeholder="至少 12 位">
+              <div class="mt-3 flex gap-1">
+                <div class="h-1.5 flex-1 rounded bar-off" id="cp-b0"></div>
+                <div class="h-1.5 flex-1 rounded bar-off" id="cp-b1"></div>
+                <div class="h-1.5 flex-1 rounded bar-off" id="cp-b2"></div>
+                <div class="h-1.5 flex-1 rounded bar-off" id="cp-b3"></div>
+              </div>
+              <p id="cp-strength" class="mt-1 text-xs" style="color: var(--fg-subtle)">强度：—</p>
+              <label class="block text-sm mt-4 mb-2" style="color: var(--fg-muted)">确认新密码</label>
+              <input id="cp-confirm" type="password" class="field w-full" placeholder="再次输入">
+              <div id="cp-error" class="hidden mt-3 alert alert-error"></div>
+              <div id="cp-ok" class="hidden mt-3 alert alert-ok"></div>
+              <button id="cp-submit" class="mt-6 w-full btn-primary">确认修改</button>
             </div>
-            <p id="cp-strength" class="mt-1 text-xs text-slate-500">强度：—</p>
-            <label class="block text-sm text-slate-300 mt-4 mb-2">确认新密码</label>
-            <input id="cp-confirm" type="password" class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white outline-none focus:ring-2 focus:ring-indigo-500/60" placeholder="再次输入">
-            <div id="cp-error" class="hidden mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2"></div>
-            <div id="cp-ok" class="hidden mt-3 text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2"></div>
-            <button id="cp-submit" class="mt-6 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-400 hover:to-violet-500 text-white font-semibold py-3 transition">确认修改</button>
-          </div>
 
-          <div class="max-w-md rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-7 mt-5">
-            <h3 class="text-lg font-semibold text-white mb-5">修改我的用户名</h3>
-            <label class="block text-sm text-slate-300 mb-2">当前用户名</label>
-            <input id="cu-current" type="text" disabled class="w-full rounded-xl bg-slate-900/40 border border-white/10 px-4 py-3 text-slate-400 outline-none" placeholder="当前用户名">
-            <label class="block text-sm text-slate-300 mt-4 mb-2">新用户名</label>
-            <input id="cu-new" type="text" class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white outline-none focus:ring-2 focus:ring-indigo-500/60" placeholder="3-32 位字母数字下划线">
-            <label class="block text-sm text-slate-300 mt-4 mb-2">当前密码（验证身份）</label>
-            <input id="cu-pass" type="password" class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white outline-none focus:ring-2 focus:ring-indigo-500/60" placeholder="当前密码">
-            <div id="cu-error" class="hidden mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2"></div>
-            <div id="cu-ok" class="hidden mt-3 text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2"></div>
-            <button id="cu-submit" class="mt-6 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-400 hover:to-violet-500 text-white font-semibold py-3 transition">确认修改用户名</button>
+            <div class="card card-pad">
+              <h3 class="text-lg font-semibold mb-5" style="color: var(--fg)">修改我的用户名</h3>
+              <label class="block text-sm mb-2" style="color: var(--fg-muted)">当前用户名</label>
+              <input id="cu-current" type="text" disabled class="field w-full" style="opacity: 0.7" placeholder="当前用户名">
+              <label class="block text-sm mt-4 mb-2" style="color: var(--fg-muted)">新用户名</label>
+              <input id="cu-new" type="text" class="field w-full" placeholder="3-32 位字母数字下划线">
+              <label class="block text-sm mt-4 mb-2" style="color: var(--fg-muted)">当前密码（验证身份）</label>
+              <input id="cu-pass" type="password" class="field w-full" placeholder="当前密码">
+              <div id="cu-error" class="hidden mt-3 alert alert-error"></div>
+              <div id="cu-ok" class="hidden mt-3 alert alert-ok"></div>
+              <button id="cu-submit" class="mt-6 w-full btn-primary">确认修改用户名</button>
+            </div>
           </div>
         </section>
 
-        <!-- 验证设置（仅管理员） -->
+        <!-- 验证设置（仅管理员，铺满整个屏幕） -->
         <section id="view-turnstile" class="view">
-          <div class="max-w-md rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-7">
-            <h3 class="text-lg font-semibold text-white mb-5">人机验证（Turnstile）</h3>
+          <div class="card card-pad">
+            <h3 class="text-lg font-semibold mb-5" style="color: var(--fg)">人机验证（Turnstile）</h3>
             <label class="flex items-center justify-between cursor-pointer mb-5">
-              <span class="text-sm text-slate-300">启用人机验证</span>
+              <span class="text-sm" style="color: var(--fg)">启用人机验证</span>
               <input id="tt-enabled" type="checkbox" class="w-5 h-5 accent-indigo-500">
             </label>
-            <label class="block text-sm text-slate-300 mb-2">站点密钥（Site Key）</label>
-            <input id="tt-sitekey" type="text" class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white outline-none focus:ring-2 focus:ring-indigo-500/60" placeholder="0x4AAAAAA...">
-            <label class="block text-sm text-slate-300 mt-4 mb-2">服务端密钥（Secret Key）</label>
-            <input id="tt-secret" type="password" class="w-full rounded-xl bg-slate-900/70 border border-white/10 px-4 py-3 text-white outline-none focus:ring-2 focus:ring-indigo-500/60" placeholder="留空则不修改已存密钥">
-            <div class="mt-5 pt-4 border-t border-white/10">
-              <button id="tt-test" class="w-full rounded-xl bg-slate-700/60 hover:bg-slate-600/60 text-white font-semibold py-2.5 transition">测试验证（保存前需通过）</button>
+            <label class="block text-sm mb-2" style="color: var(--fg-muted)">站点密钥（Site Key）</label>
+            <input id="tt-sitekey" type="text" class="field w-full" placeholder="0x4AAAAAA...">
+            <label class="block text-sm mt-4 mb-2" style="color: var(--fg-muted)">服务端密钥（Secret Key）</label>
+            <input id="tt-secret" type="password" class="field w-full" placeholder="留空则不修改已存密钥">
+            <div class="mt-5 pt-4" style="border-top: 1px solid var(--border)">
+              <button id="tt-test" class="w-full btn-secondary" style="padding: 0.6rem">测试验证（保存前需通过）</button>
               <div id="tt-test-holder" class="mt-3"></div>
-              <div id="tt-test-status" class="hidden mt-3 text-sm rounded-lg px-3 py-2"></div>
+              <div id="tt-test-status" class="hidden mt-3 alert"></div>
             </div>
-            <div id="tt-status" class="hidden mt-3 text-sm rounded-lg px-3 py-2"></div>
-            <button id="tt-save" class="mt-6 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-400 hover:to-violet-500 text-white font-semibold py-3 transition">保存设置</button>
-            <p class="mt-4 text-xs text-slate-500">默认关闭。启用后登录与注册需通过 Cloudflare Turnstile 校验；密钥随账户凭据加密落盘存储，代码中不再硬编码。保存前须先「测试验证」通过（真实挑战 + 密钥核验），域名白名单暂未启用。</p>
+            <div id="tt-status" class="hidden mt-3 alert"></div>
+            <button id="tt-save" class="mt-6 w-full btn-primary">保存设置</button>
+            <p class="mt-4 text-xs" style="color: var(--fg-muted)">默认关闭。启用后登录与注册需通过 Cloudflare Turnstile 校验；密钥随账户凭据加密落盘存储，代码中不再硬编码。保存前须先「测试验证」通过（真实挑战 + 密钥核验），域名白名单暂未启用。</p>
           </div>
         </section>
       </div>
@@ -289,6 +443,22 @@
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>
 
     <script>
+      // ── 主题：auto / light / dark，默认跟随系统偏好 ──
+      const THEME_KEY = "lumino-theme";
+      function systemPrefersDark() { return window.matchMedia("(prefers-color-scheme: dark)").matches; }
+      function applyTheme(mode) {
+        const dark = mode === "dark" || (mode === "auto" && systemPrefersDark());
+        document.documentElement.classList.toggle("dark", dark);
+        document.querySelectorAll("#theme-seg button").forEach(b => b.classList.toggle("active", b.dataset.theme === mode));
+      }
+      let themeMode = localStorage.getItem(THEME_KEY) || "auto";
+      applyTheme(themeMode);
+      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (themeMode === "auto") applyTheme("auto"); });
+      document.getElementById("theme-seg").addEventListener("click", (e) => {
+        const b = e.target.closest("button"); if (!b) return;
+        themeMode = b.dataset.theme; localStorage.setItem(THEME_KEY, themeMode); applyTheme(themeMode);
+      });
+
       let session = null;       // {username, role}
       let monitorStarted = false, monitorTimer = null;
       let logsStarted = false, ws = null;
@@ -308,8 +478,8 @@
         document.getElementById("home-user").textContent = session.username;
         document.getElementById("avatar").textContent = session.username[0].toUpperCase();
         const roleEl = document.getElementById("side-role");
-        if (session.role === "admin") { roleEl.innerHTML = '<span class="text-indigo-400">管理员</span>'; document.getElementById("home-role").textContent = "管理员"; }
-        else { roleEl.innerHTML = '<span class="text-slate-400">普通用户</span>'; document.getElementById("home-role").textContent = "普通用户"; }
+        if (session.role === "admin") { roleEl.innerHTML = '<span class="badge badge-admin">管理员</span>'; document.getElementById("home-role").textContent = "管理员"; }
+        else { roleEl.innerHTML = '<span class="badge badge-user">普通用户</span>'; document.getElementById("home-role").textContent = "普通用户"; }
         if (session.role === "admin") { document.getElementById("nav-users").classList.remove("hidden"); document.getElementById("nav-turnstile").classList.remove("hidden"); }
 
         document.getElementById("clock").textContent = new Date().toLocaleString();
@@ -318,7 +488,6 @@
         document.querySelectorAll(".nav-item").forEach(b => b.addEventListener("click", () => showView(b.dataset.view)));
         document.getElementById("logout-btn").addEventListener("click", async () => { await fetch("/logout"); location.href = "/login"; });
 
-        // 初始视图：根据路径判断（/monitor、/logs 直接进对应面板）
         const p = location.pathname;
         let initial = "home";
         if (p.endsWith("/monitor")) initial = "monitor";
@@ -337,7 +506,6 @@
         if (name === "turnstile") initTurnstile();
         if (name === "logs") { if (!logsStarted) { initLogs(); logsStarted = true; } connectLogs(); }
         if (name === "rooms") { document.getElementById("rooms-refresh").onclick = roomsTick; roomsTick(); roomsTimer = setInterval(roomsTick, 3000); }
-        // 离开日志视图时断开 WS
         if (name !== "logs" && ws) { try { ws.close(); } catch (e) {} ws = null; }
         if (name !== "monitor" && monitorTimer) { clearInterval(monitorTimer); monitorTimer = null; }
         if (name !== "monitor" && animFrame) { stopCharts(); }
@@ -346,7 +514,6 @@
       }
 
       // ── 监控 ──
-      // 监控：自包含 SVG-free canvas 迷你折线，不依赖任何外部 CDN（离线/LAN 也能渲染）
       let hist = null, disp = null;
       function initMonitor() {
         if (hist) return;
@@ -377,7 +544,6 @@
         if (fill) { ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); }
       }
 
-      // 平滑过渡：disp 数组逐帧向 hist 缓动，再用 requestAnimationFrame 重绘
       let animFrame = null;
       function chartStep() {
         if (!hist || !disp) return;
@@ -401,7 +567,6 @@
       }
       function monitorTick() {
         fetch("/metrics").then(r => r.json()).then(d => {
-          // 统计卡片：无条件更新（不依赖任何图表库，避免 CDN 失败导致整面板恒为 0）
           document.getElementById("conn-current").textContent = d.connections.current;
           document.getElementById("room-count").textContent = d.rooms;
           document.getElementById("user-count").textContent = d.users;
@@ -412,17 +577,17 @@
           const h = hist, dp = disp;
           h.labels.push(new Date().toLocaleTimeString());
           h.conn.push(d.connections.current); h.rooms.push(d.rooms); h.users.push(d.users);
-          h.msgIn.push(Math.round(d.rates.msgs_in)); h.noteOps.push(Math.round(d.rates.note_ops));
+          h.msgIn.push(Math.round(d.rates.msgs_in)); h.noteOps.push(Math.round(d.rates.noteOps));
           h.mem.push(d.resources.rss_mb); h.cpu.push(d.resources.cpu_pct);
           dp.conn.push(d.connections.current); dp.rooms.push(d.rooms); dp.users.push(d.users);
-          dp.msgIn.push(Math.round(d.rates.msgs_in)); dp.noteOps.push(Math.round(d.rates.note_ops));
+          dp.msgIn.push(Math.round(d.rates.msgs_in)); dp.noteOps.push(Math.round(d.rates.noteOps));
           dp.mem.push(d.resources.rss_mb); dp.cpu.push(d.resources.cpu_pct);
           if (h.labels.length > 120) ["labels","conn","rooms","users","msgIn","noteOps","mem","cpu"].forEach(k => h[k].shift());
           if (h.labels.length > 120) ["conn","rooms","users","msgIn","noteOps","mem","cpu"].forEach(k => dp[k].shift());
         }).catch(() => {});
       }
 
-      // ── 房间管理（监控）──
+      // ── 房间管理 ──
       function escapeHtml(t) { const d = document.createElement("div"); d.textContent = t == null ? "" : t; return d.innerHTML; }
       function fmtTime(ms) { if (!ms) return "—"; try { return new Date(ms).toLocaleString(); } catch (e) { return "—"; } }
       function roomsTick() {
@@ -437,24 +602,24 @@
             const members = r.members || [];
             const memberHtml = members.length
               ? members.map(m => {
-                  const hostBadge = m.isHost ? '<span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">房主</span>' : "";
-                  const kick = m.isHost ? "" : '<button class="ml-1 px-1.5 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-[10px]" onclick="kickUser(\'' + r.inviteCode + "','" + m.id + '\')">踢出</button>';
+                  const hostBadge = m.isHost ? '<span class="badge badge-warn ml-1">房主</span>' : "";
+                  const kick = m.isHost ? "" : '<button class="btn-link-danger ml-1 text-[10px]" onclick="kickUser(\'' + r.inviteCode + "','" + m.id + '\')">踢出</button>';
                   const dot = '<span class="inline-block w-2 h-2 rounded-full mr-1" style="background:' + (m.color || "#888") + '"></span>';
-                  return '<span class="inline-flex items-center mr-2 mb-1 px-2 py-1 rounded-lg bg-slate-800/60 border border-white/10 text-xs text-slate-200">' + dot + escapeHtml(m.username) + hostBadge + kick + "</span>";
+                  return '<span class="chip mr-2 mb-1">' + dot + escapeHtml(m.username) + hostBadge + kick + "</span>";
                 }).join("")
-              : '<span class="text-xs text-slate-500">（无成员）</span>';
+              : '<span class="text-xs" style="color:var(--fg-muted)">（无成员）</span>';
             return (
-              '<div class="rounded-xl bg-slate-900/60 border border-white/10 p-4">' +
+              '<div class="card p-4">' +
                 '<div class="flex items-center justify-between mb-2 gap-3">' +
-                  '<div class="font-semibold text-white truncate">' + escapeHtml(r.name) + "</div>" +
+                  '<div class="font-semibold truncate" style="color:var(--fg)">' + escapeHtml(r.name) + "</div>" +
                   '<div class="flex items-center gap-2 shrink-0">' +
-                    '<span class="text-xs text-slate-500">邀请码 <code class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">' + escapeHtml(r.inviteCode) + "</code></span>" +
-                    '<button class="px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs" onclick="deleteRoom(\'' + r.inviteCode + '\')">解散</button>' +
+                    '<span class="text-xs" style="color:var(--fg-muted)">邀请码 <code class="chip">' + escapeHtml(r.inviteCode) + "</code></span>" +
+                    '<button class="btn-link-danger" onclick="deleteRoom(\'' + r.inviteCode + '\')">解散</button>' +
                   "</div>" +
                 "</div>" +
-                '<div class="flex items-center gap-4 text-sm text-slate-400 mb-3">' +
-                  '<span>人数 <b class="text-slate-100 tabular-nums">' + (r.userCount || 0) + "</b> / " + (r.maxUsers || 0) + "</span>" +
-                  '<span>内部用户 <b class="text-slate-100 tabular-nums">' + members.length + "</b></span>" +
+                '<div class="flex items-center gap-4 text-sm mb-3" style="color:var(--fg-muted)">' +
+                  '<span>人数 <b class="num">' + (r.userCount || 0) + "</b> / " + (r.maxUsers || 0) + "</span>" +
+                  '<span>内部用户 <b class="num">' + members.length + "</b></span>" +
                   '<span class="text-xs">最近活跃 ' + fmtTime(r.lastModified) + "</span>" +
                 "</div>" +
                 '<div class="mb-3">' + describeLifetime(r) + "</div>" +
@@ -464,7 +629,6 @@
           }).join("");
         }).catch(() => {});
       }
-      // 计算文件 SHA-256 十六进制（用于工程哈希元数据，失败则回退为空串）
       async function fileSha256Hex(file) {
         try {
           const buf = await file.arrayBuffer();
@@ -512,7 +676,6 @@
         const d = await res.json();
         if (!res.ok || !d.success) { alert(d.error || "创建失败"); return; }
 
-        // 预存文件上传：创建成功后立即上传工程文件（无需等待成员加入）
         const fileInput = document.getElementById("room-file-input");
         if (fileInput.files && fileInput.files.length) {
           const file = fileInput.files[0];
@@ -535,21 +698,20 @@
         roomsTick();
       }
 
-      // ── 房间生命周期描述（房间管理卡片展示）──
       function describeLifetime(r) {
         const lt = r.lifetime;
-        if (!lt) return '<span class="text-xs px-2 py-0.5 rounded bg-slate-700/50 text-slate-300">瞬时（离开即关闭）</span>';
-        if (lt.mode === "never") return '<span class="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">常驻 · 永不关闭</span>';
-        if (lt.mode === "timed") return '<span class="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-300">定时关闭 · ' + fmtTime(lt.at) + "</span>";
+        if (!lt) return '<span class="badge badge-neutral">瞬时（离开即关闭）</span>';
+        if (lt.mode === "never") return '<span class="badge badge-ok">常驻 · 永不关闭</span>';
+        if (lt.mode === "timed") return '<span class="badge badge-info">定时关闭 · ' + fmtTime(lt.at) + "</span>";
         const m = lt.minutes || 0;
         if (r.userCount === 0 && r.emptySince) {
-          if (m === 0) return '<span class="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">空置 · 即将关闭</span>';
+          if (m === 0) return '<span class="badge badge-warn">空置 · 即将关闭</span>';
           const left = m * 60000 - (Date.now() - r.emptySince);
-          if (left > 0) return '<span class="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">空置 · 约 ' + Math.ceil(left / 60000) + " 分钟后关闭</span>";
-          return '<span class="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">空置 · 即将关闭</span>';
+          if (left > 0) return '<span class="badge badge-warn">空置 · 约 ' + Math.ceil(left / 60000) + " 分钟后关闭</span>";
+          return '<span class="badge badge-warn">空置 · 即将关闭</span>';
         }
-        if (m === 0) return '<span class="text-xs px-2 py-0.5 rounded bg-slate-700/50 text-slate-300">离开即关闭</span>';
-        return '<span class="text-xs px-2 py-0.5 rounded bg-slate-700/50 text-slate-300">离开后 ' + m + " 分钟关闭</span>";
+        if (m === 0) return '<span class="badge badge-neutral">离开即关闭</span>';
+        return '<span class="badge badge-neutral">离开后 ' + m + " 分钟关闭</span>";
       }
       async function deleteRoom(code) {
         if (!confirm("确定解散房间 " + code + "？所有成员将被移出。")) return;
@@ -584,9 +746,9 @@
           logEntries.push(entry);
           const div = document.createElement("div");
           const lv = entry.level || "info";
-          div.className = "px-2 py-0.5 border-l-2 " + ({debug:"border-slate-600 text-slate-400",info:"border-blue-400 text-blue-300",warn:"border-yellow-400 text-yellow-300",error:"border-rose-400 text-rose-300"}[lv] || "border-slate-600");
+          div.className = "log-line " + ({ debug:"log-debug", info:"log-info", warn:"log-warn", error:"log-error" }[lv] || "log-debug");
           div.dataset.level = lv;
-          div.innerHTML = `<span class="text-slate-600 mr-2">${fmt(entry.timestamp)}</span><span class="uppercase mr-2 font-bold">${lv}</span><span>${esc(entry.message)}</span>`;
+          div.innerHTML = `<span style="color:var(--fg-subtle)" class="mr-2">${fmt(entry.timestamp)}</span><span class="uppercase mr-2 font-bold">${lv}</span><span>${esc(entry.message)}</span>`;
           document.getElementById("logContainer").appendChild(div);
           document.getElementById("logContainer").scrollTop = document.getElementById("logContainer").scrollHeight;
           applyFilters();
@@ -610,36 +772,36 @@
       function connectLogs() {
         if (ws && (ws.readyState === 1 || ws.readyState === 0)) return;
         const bar = document.getElementById("statusBar");
-        bar.className = "mt-2 text-xs px-3 py-1.5 rounded-lg bg-yellow-500 text-slate-900 flex justify-between";
+        bar.className = "status-bar st-connecting mt-2";
         document.getElementById("connectionStatus").textContent = "正在连接...";
         const proto = location.protocol === "https:" ? "wss:" : "ws:";
         ws = new WebSocket(proto + "//" + location.host + "/ws");
-        ws.onopen = () => { bar.className = "mt-2 text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white flex justify-between"; document.getElementById("connectionStatus").textContent = "已连接"; ws.send(JSON.stringify({ type: "subscribeLogs" })); };
+        ws.onopen = () => { bar.className = "status-bar st-connected mt-2"; document.getElementById("connectionStatus").textContent = "已连接"; ws.send(JSON.stringify({ type: "subscribeLogs" })); };
         ws.onmessage = (ev) => { try { const d = JSON.parse(ev.data); if (d.type === "log") window._addLog(d); else if (d.type === "logHistory") d.logs.forEach(window._addLog); } catch (e) {} };
-        ws.onclose = () => { bar.className = "mt-2 text-xs px-3 py-1.5 rounded-lg bg-rose-600 text-white flex justify-between"; document.getElementById("connectionStatus").textContent = "已断开"; setTimeout(() => { if (document.getElementById("view-logs").classList.contains("active")) connectLogs(); }, 3000); };
+        ws.onclose = () => { bar.className = "status-bar st-disconnected mt-2"; document.getElementById("connectionStatus").textContent = "已断开"; setTimeout(() => { if (document.getElementById("view-logs").classList.contains("active")) connectLogs(); }, 3000); };
       }
 
       // ── 用户管理 ──
       async function loadUsers() {
         const res = await fetch("/api/users");
-        if (!res.ok) { document.getElementById("user-rows").innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-center text-rose-400">加载失败：权限不足</td></tr>'; return; }
+        if (!res.ok) { document.getElementById("user-rows").innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-center" style="color:var(--danger)">加载失败：权限不足</td></tr>'; return; }
         const { accounts } = await res.json();
         const rows = accounts.map(a => {
-          const role = a.role === "admin" ? '<span class="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-xs">管理员</span>' : '<span class="px-2 py-0.5 rounded bg-slate-600/30 text-slate-300 text-xs">普通用户</span>';
-          const st = a.must_change ? '<span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 text-xs">需改密</span>' : '<span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-xs">正常</span>';
+          const role = a.role === "admin" ? '<span class="badge badge-admin">管理员</span>' : '<span class="badge badge-user">普通用户</span>';
+          const st = a.must_change ? '<span class="badge badge-warn">需改密</span>' : '<span class="badge badge-ok">正常</span>';
           const when = new Date(a.created_at * 1000).toLocaleString();
           return `<tr>
-            <td class="px-4 py-3 text-white">${esc(a.username)}</td>
+            <td class="px-4 py-3" style="color:var(--fg)">${esc(a.username)}</td>
             <td class="px-4 py-3">${role}</td>
             <td class="px-4 py-3">${st}</td>
-            <td class="px-4 py-3 text-slate-400">${when}</td>
+            <td class="px-4 py-3" style="color:var(--fg-muted)">${when}</td>
             <td class="px-4 py-3 text-right space-x-2">
-              <button class="px-2 py-1 rounded bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 text-xs" onclick="changeRole('${esc(a.username)}')">修改角色</button>
-              <button class="px-2 py-1 rounded bg-slate-700/60 hover:bg-slate-700 text-xs" onclick="resetUser('${esc(a.username)}')">重置密码</button>
-              <button class="px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs" onclick="deleteUser('${esc(a.username)}')">删除</button>
+              <button class="btn-link" onclick="changeRole('${esc(a.username)}')">修改角色</button>
+              <button class="btn-link" onclick="resetUser('${esc(a.username)}')">重置密码</button>
+              <button class="btn-link-danger" onclick="deleteUser('${esc(a.username)}')">删除</button>
             </td></tr>`;
         }).join("");
-        document.getElementById("user-rows").innerHTML = rows || '<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">暂无账户</td></tr>';
+        document.getElementById("user-rows").innerHTML = rows || '<tr><td colspan="5" class="px-4 py-6 text-center" style="color:var(--fg-muted)">暂无账户</td></tr>';
       }
       function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
       async function deleteUser(name) {
@@ -676,7 +838,7 @@
         const res = await fetch("/api/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: name, password: pass, role }) });
         const d = await res.json();
         msg.textContent = res.ok ? "账户已创建。" : (d.error || "创建失败");
-        msg.className = "text-xs mt-2 " + (res.ok ? "text-emerald-400" : "text-rose-400");
+        msg.className = "text-xs mt-2 " + (res.ok ? "msg-ok" : "msg-err");
         msg.classList.remove("hidden");
         if (res.ok) { document.getElementById("nu-name").value = ""; document.getElementById("nu-pass").value = ""; loadUsers(); }
       });
@@ -686,7 +848,6 @@
         const cp = document.getElementById("cp-new"), cf = document.getElementById("cp-confirm");
         [cp, cf].forEach(el => el.addEventListener("input", () => { checkPwd(); document.getElementById("cp-error").classList.add("hidden"); }));
         document.getElementById("cp-submit").addEventListener("click", changePassword);
-        // 用户名修改（预填当前用户名 + 绑定提交）
         document.getElementById("cu-current").value = session.username;
         document.getElementById("cu-submit").addEventListener("click", changeUsername);
       }
@@ -712,33 +873,30 @@
       function initTurnstile() {
         const status = document.getElementById("tt-status");
         const tstatus = document.getElementById("tt-test-status");
-        status.className = "hidden mt-3 text-sm rounded-lg px-3 py-2";
-        tstatus.className = "hidden mt-3 text-sm rounded-lg px-3 py-2";
+        status.className = "hidden mt-3 alert";
+        tstatus.className = "hidden mt-3 alert";
         ttTestPassed = false; ttTestedSiteKey = ""; ttTestedSecret = "";
 
         const skEl = document.getElementById("tt-sitekey");
         const seEl = document.getElementById("tt-secret");
-        // 修改密钥后，已通过的测试失效，必须重新测试
         const invalidate = () => {
           ttTestPassed = false; ttTestedSiteKey = ""; ttTestedSecret = "";
-          tstatus.className = "hidden mt-3 text-sm rounded-lg px-3 py-2";
+          tstatus.className = "hidden mt-3 alert";
         };
         skEl.oninput = invalidate; seEl.oninput = invalidate;
 
         fetch("/api/settings/turnstile").then(r => r.json()).then(cfg => {
           skEl.value = cfg.site_key || "";
-          // 服务端密钥不回显
         }).catch(() => {});
 
-        // 测试验证：用当前输入的 site_key 渲染组件，完成挑战后校验密钥
         document.getElementById("tt-test").onclick = () => {
           const site_key = skEl.value.trim();
-          const secret = seEl.value; // 空=使用已存密钥
-          tstatus.className = "mt-3 text-sm text-slate-300 bg-slate-500/10 border border-slate-500/20 rounded-lg px-3 py-2";
+          const secret = seEl.value;
+          tstatus.className = "mt-3 alert alert-info";
           tstatus.textContent = "正在准备验证组件…";
           if (!site_key) {
             tstatus.textContent = "请先填写站点密钥";
-            tstatus.className = "mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2";
+            tstatus.className = "mt-3 alert alert-error";
             return;
           }
           const holder = document.getElementById("tt-test-holder");
@@ -752,6 +910,7 @@
                   action: "test",
                   callback: async (token) => {
                     tstatus.textContent = "组件已通过，正在核验密钥…";
+                    tstatus.className = "mt-3 alert alert-info";
                     const res = await fetch("/api/settings/turnstile/test", {
                       method: "POST", headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ site_key, secret_key: secret, token }),
@@ -760,16 +919,16 @@
                     if (d.ok) {
                       ttTestPassed = true; ttTestedSiteKey = site_key; ttTestedSecret = secret;
                       tstatus.textContent = "✓ 验证通过，现在可以保存。";
-                      tstatus.className = "mt-3 text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2";
+                      tstatus.className = "mt-3 alert alert-ok";
                     } else {
                       ttTestPassed = false;
                       tstatus.textContent = d.error || "验证未通过";
-                      tstatus.className = "mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2";
+                      tstatus.className = "mt-3 alert alert-error";
                     }
                   },
                   "error-callback": () => {
                     tstatus.textContent = "人机验证组件加载失败，请检查站点密钥与网络后重试";
-                    tstatus.className = "mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2";
+                    tstatus.className = "mt-3 alert alert-error";
                   },
                 });
               });
@@ -781,12 +940,12 @@
         };
 
         document.getElementById("tt-save").onclick = async () => {
-          status.className = "hidden mt-3 text-sm rounded-lg px-3 py-2";
+          status.className = "hidden mt-3 alert";
           const site_key = skEl.value.trim();
-          const secret = seEl.value; // 空=不修改
+          const secret = seEl.value;
           if (!ttTestPassed || ttTestedSiteKey !== site_key || ttTestedSecret !== secret) {
             status.textContent = "请先点击「测试验证」并通过后再保存。";
-            status.className = "mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2";
+            status.className = "mt-3 alert alert-error";
             return;
           }
           const enabled = document.getElementById("tt-enabled").checked;
@@ -798,12 +957,12 @@
           if (res.ok && d.success) {
             ttTestPassed = false; ttTestedSiteKey = ""; ttTestedSecret = "";
             status.textContent = "已保存，配置已加密写入本地。";
-            status.className = "mt-3 text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2";
+            status.className = "mt-3 alert alert-ok";
             document.getElementById("tt-secret").value = "";
             document.getElementById("tt-test-holder").innerHTML = "";
           } else {
             status.textContent = d.error || "保存失败";
-            status.className = "mt-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2";
+            status.className = "mt-3 alert alert-error";
           }
         };
       }
@@ -813,8 +972,8 @@
         if (v.length >= 12) lvl = 1;
         if (/[a-z]/.test(v) && /[A-Z]/.test(v) && /[0-9]/.test(v) && /[^a-zA-Z0-9]/.test(v)) lvl = 3;
         else if ((/[a-z]/.test(v)&&/[A-Z]/.test(v)) || (/[0-9]/.test(v)&&/[^a-zA-Z0-9]/.test(v))) lvl = 2;
-        const pal = ["bg-rose-500","bg-orange-500","bg-amber-400","bg-emerald-500"];
-        ["cp-b0","cp-b1","cp-b2","cp-b3"].forEach((id,i) => document.getElementById(id).className = "h-1.5 flex-1 rounded " + (i <= lvl && lvl > 0 ? pal[lvl] : "bg-slate-700"));
+        const pal = [".bar-weak", ".bar-mid", ".bar-mid", ".bar-strong"];
+        ["cp-b0","cp-b1","cp-b2","cp-b3"].forEach((id,i) => document.getElementById(id).className = "h-1.5 flex-1 rounded " + (i <= lvl && lvl > 0 ? pal[lvl] : "bar-off"));
         document.getElementById("cp-strength").textContent = "强度：" + ["—","弱","中","强"][lvl];
       }
       async function changePassword() {
