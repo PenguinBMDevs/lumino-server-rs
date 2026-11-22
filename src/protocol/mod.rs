@@ -83,13 +83,12 @@ mod tests {
 
     #[test]
     fn parse_note_batch() {
-        let raw = r#"{"type":"noteBatch","notes":{"action":"add","notes":[{"id":1,"tick":960.0,"key":60,"length":480.0,"velocity":100,"channel":0,"trackIndex":0}],"timestamp":1700000000000}}"#;
+        let raw = r#"{"type":"noteBatch","notes":{"action":"add","notes":[{"tick":960.0,"key":60,"length":480.0,"velocity":100,"channel":0,"trackIndex":0}],"timestamp":1700000000000}}"#;
         let msg: ClientMessage = serde_json::from_str(raw).unwrap();
         match msg {
             ClientMessage::NoteBatch { notes } => {
                 assert_eq!(notes.action, NoteAction::Add);
                 assert_eq!(notes.notes.len(), 1);
-                assert_eq!(notes.notes[0].id, 1);
                 assert_eq!(notes.notes[0].tick, 960.0);
                 assert_eq!(notes.notes[0].key, 60);
                 assert_eq!(notes.notes[0].track_index, 0);
@@ -100,7 +99,7 @@ mod tests {
 
     #[test]
     fn parse_note_batch_move() {
-        let raw = r#"{"type":"noteBatch","notes":{"action":"move","notes":[{"id":1,"tick":960,"key":60,"length":480,"velocity":100,"channel":0,"trackIndex":0}],"tickOffset":480,"keyOffset":2,"timestamp":1700000000000}}"#;
+        let raw = r#"{"type":"noteBatch","notes":{"action":"move","notes":[{"tick":960,"key":60,"length":480,"velocity":100,"channel":0,"trackIndex":0}],"tickOffset":480,"keyOffset":2,"timestamp":1700000000000}}"#;
         let msg: ClientMessage = serde_json::from_str(raw).unwrap();
         match msg {
             ClientMessage::NoteBatch { notes } => {

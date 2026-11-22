@@ -226,7 +226,7 @@ async fn note_batch_broadcast_and_sync() {
         "notes": {
             "action": "add",
             "notes": [{
-                "id": 1, "tick": 960.0, "key": 60, "length": 480.0,
+                "tick": 960.0, "key": 60, "length": 480.0,
                 "velocity": 100, "channel": 0, "trackIndex": 0
             }],
             "timestamp": 1700000000000i64,
@@ -238,10 +238,11 @@ async fn note_batch_broadcast_and_sync() {
     let update = wait_for(&mut ws1, "noteBatchUpdate").await;
     assert_eq!(update["userId"], user_b_id);
     assert_eq!(update["operation"]["action"], "add");
-    assert_eq!(update["operation"]["notes"][0]["id"], 1);
+    assert_eq!(update["operation"]["notes"][0]["tick"], 960.0);
+    assert_eq!(update["operation"]["notes"][0]["key"], 60);
     assert!(
-        update["operation"]["notes"][0]["id"].is_u64(),
-        "wire 协议：id 必须是数字"
+        update["operation"]["notes"][0]["id"].is_null(),
+        "按值协议：不得出现废弃的 id 字段"
     );
     assert_eq!(update["operation"]["notes"][0]["trackIndex"], 0);
 
@@ -250,6 +251,7 @@ async fn note_batch_broadcast_and_sync() {
     let sync = wait_for(&mut ws2, "fullSync").await;
     let notes = sync["projectState"]["notes"].as_array().unwrap();
     assert_eq!(notes.len(), 1);
-    assert_eq!(notes[0]["notes"][0]["id"], 1);
+    assert_eq!(notes[0]["notes"][0]["tick"], 960.0);
+    assert!(notes[0]["notes"][0]["id"].is_null());
     assert_eq!(sync["users"].as_array().unwrap().len(), 2);
 }

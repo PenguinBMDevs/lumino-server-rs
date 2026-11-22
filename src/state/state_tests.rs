@@ -1,7 +1,7 @@
 
 use super::*;
 use crate::protocol::NoteBatchOperation;
-use crate::protocol::{NoteAction, SyncNote};
+use crate::protocol::{NoteAction, NoteKey, SyncNote};
 
 fn make_user(state: &Arc<AppState>) -> Arc<User> {
     let (tx, _rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -12,15 +12,19 @@ fn make_user(state: &Arc<AppState>) -> Arc<User> {
     )
 }
 
-fn note(id: u64) -> SyncNote {
+/// 按值身份的音符：用 tick 区分不同音符（值相同即同一音符）。
+fn note(tick: f32) -> SyncNote {
+    note_with(tick, 60, 0)
+}
+
+fn note_with(tick: f32, key: u16, track_index: usize) -> SyncNote {
     SyncNote {
-        id,
-        tick: 0.0,
-        key: 60,
+        tick,
+        key,
         length: 480.0,
         velocity: 100,
         channel: 0,
-        track_index: 0,
+        track_index,
     }
 }
 
@@ -127,55 +131,55 @@ fn host_transfer() {
 #[test]
 fn project_add_delete() {
     let mut p = ProjectState::new();
-    p.apply(&mut op(NoteAction::Add, vec![note(1), note(2)]), "u1");
+    p.apply(&mut op(NoteAction::Add, vec![note(1.0), note(2.0)]), "u1");
     assert_eq!(p.notes.len(), 2);
-    p.apply(&mut op(NoteAction::Delete, vec![note(1)]), "u1");
+    p.apply(&mut op(NoteAction::Delete, vec![note(1.0)]), "u1");
     assert_eq!(p.notes.len(), 1);
     let snap = p.snapshot();
     assert_eq!(snap.notes.len(), 2); // add + delete 两条 op
 }
 
 #[test]
-fn project_paste_regenerates_id() {
+fn project_paste_uses_client_computed_value() {
     let mut p = ProjectState::new();
-    let mut paste = op(NoteAction::Paste, vec![note(999)]);
-    paste.tick_offset = Some(960.0);
+    // 客户端已按值算好目标位置（tick/key/轨道），服务端直接按值插入，不再重分配 id。
+    let mut paste = op(NoteAction::Paste, vec![note(960.0)]);
     paste.key_offset = Some(12);
     paste.target_track = Some(2);
-    let old_id = paste.notes[0].id;
+    paste.notes[0].key = 72;
+    paste.notes[0].track_index = 2;
     p.apply(&mut paste, "u1");
-    let new_id = paste.notes[0].id;
-    assert_ne!(new_id, old_id);
-    assert_eq!(new_id, 1, "服务端 paste id 从 1 开始自增");
     assert_eq!(p.notes.len(), 1);
-    assert!(p.notes.contains_key(&new_id));
-    let n = p.notes.get(&new_id).expect("paste 后的音符应在快照中");
+    let n = p
+        .notes
+        .get(&NoteKey::from(&note_with(960.0, 72, 2)))
+        .expect("paste 后的音符应按值身份在快照中");
     assert_eq!(n.tick, 960.0);
     assert_eq!(n.key, 72);
     assert_eq!(n.track_index, 2);
 }
 
-/// paste id 计数器必须单调自增，多次 paste 不能互相覆盖
+/// 按值身份：相同值 paste 互相覆盖（幂等），不同值并存
 #[test]
-fn project_paste_id_monotonic() {
+fn project_paste_by_value_identity() {
     let mut p = ProjectState::new();
-    let mut ids = Vec::new();
+    // 同样的值 paste 三次 → 按值身份相同，快照只有 1 个
     for _ in 0..3 {
-        let mut paste = op(NoteAction::Paste, vec![note(999)]);
-        paste.target_track = Some(0);
-        p.apply(&mut paste, "u1");
-        ids.push(paste.notes[0].id);
+        let paste = op(NoteAction::Paste, vec![note(0.0)]);
+        p.apply(&mut paste.clone(), "u1");
     }
-    assert_eq!(ids, vec![1, 2, 3]);
-    assert_eq!(p.notes.len(), 3, "三次 paste 应产生三个独立音符");
-    assert_eq!(p.next_paste_id, 4);
+    assert_eq!(p.notes.len(), 1, "相同值 paste 应按值去重");
+    // 不同 tick 的 paste → 不同身份，并存
+    let paste2 = op(NoteAction::Paste, vec![note(480.0)]);
+    p.apply(&mut paste2.clone(), "u1");
+    assert_eq!(p.notes.len(), 2, "不同值 paste 应并存");
 }
 
 #[test]
 fn project_snapshot_after_truncate() {
     let mut p = ProjectState::new();
     for i in 0..(MAX_OPS_LOG + 10) {
-        let mut op = op(NoteAction::Add, vec![note(i as u64)]);
+        let mut op = op(NoteAction::Add, vec![note(i as f32)]);
         op.timestamp = i as u64;
         p.apply(&mut op, "u1");
     }
@@ -189,12 +193,17 @@ fn project_snapshot_after_truncate() {
 #[test]
 fn project_move() {
     let mut p = ProjectState::new();
-    p.apply(&mut op(NoteAction::Add, vec![note(1)]), "u1");
-    let mut mv = op(NoteAction::Move, vec![note(1)]);
+    p.apply(&mut op(NoteAction::Add, vec![note(960.0)]), "u1");
+    let mut mv = op(NoteAction::Move, vec![note(960.0)]);
     mv.tick_offset = Some(480.0);
     mv.key_offset = Some(2);
     p.apply(&mut mv, "u1");
-    let n = p.notes.get(&1).expect("move 后音符 1 应存在");
-    assert_eq!(n.tick, 480.0);
+    // Move 改了 tick/key → 按值身份也变，旧键应被移除、新键插入。
+    assert!(!p.notes.contains_key(&NoteKey::from(&note(960.0))));
+    let n = p
+        .notes
+        .get(&NoteKey::from(&note_with(1440.0, 62, 0)))
+        .expect("move 后的音符应按新值身份存在");
+    assert_eq!(n.tick, 1440.0);
     assert_eq!(n.key, 62);
 }

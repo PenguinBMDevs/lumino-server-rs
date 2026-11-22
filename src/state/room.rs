@@ -8,7 +8,8 @@ use std::sync::{Arc, RwLock};
 
 use super::user::User;
 use crate::protocol::{
-    NoteAction, NoteBatchOperation, ProjectStateSnapshot, RoomInfo, SyncNote, UserInfo, ViewState,
+    NoteAction, NoteBatchOperation, NoteKey, ProjectStateSnapshot, RoomInfo, SyncNote, UserInfo,
+    ViewState,
 };
 use crate::util::now_ms;
 
@@ -40,8 +41,8 @@ pub const MAX_OPS_LOG: usize = 500;
 
 /// 项目状态（每房间一份）
 pub struct ProjectState {
-    /// 音符快照：note_id → note（供 fullSync 合成 + 操作应用）
-    pub(crate) notes: HashMap<u64, SyncNote>,
+    /// 音符快照：按值身份 → note（供 fullSync 合成 + 操作应用）
+    pub(crate) notes: HashMap<NoteKey, SyncNote>,
     /// 操作日志（delta，供客户端重放）
     pub(crate) ops: VecDeque<NoteBatchOperation>,
     /// 操作日志是否被截断过（截断后 fullSync 必须发快照）
@@ -50,8 +51,6 @@ pub struct ProjectState {
     pub view_state: ViewState,
     pub last_modified: u64,
     pub modified_by: Option<String>,
-    /// paste 操作重新分配 note id 的自增计数器（服务端权威，单调递增）
-    pub(crate) next_paste_id: u64,
 }
 
 impl ProjectState {
@@ -63,45 +62,43 @@ impl ProjectState {
             view_state: ViewState::default(),
             last_modified: now_ms(),
             modified_by: None,
-            next_paste_id: 1,
         }
     }
 
-    /// 应用一次音符操作；paste 操作会就地改写 note id（保证全局一致）
+    /// 应用一次音符操作（按值身份，与客户端 d792c6d7 一致）。
+    ///
+    /// 音符身份 = 音乐内容本身，无全局 ID；Move 会删旧键插新键（tick/key 变了）。
     pub fn apply(&mut self, op: &mut NoteBatchOperation, user_id: &str) {
         match op.action {
             NoteAction::Add | NoteAction::Update => {
                 for n in &op.notes {
-                    self.notes.insert(n.id, n.clone());
+                    self.notes.insert(NoteKey::from(n), n.clone());
                 }
             }
             NoteAction::Delete => {
                 for n in &op.notes {
-                    self.notes.remove(&n.id);
+                    self.notes.remove(&NoteKey::from(n));
                 }
             }
             NoteAction::Move => {
                 let tick_off = op.tick_offset.unwrap_or(0.0);
                 let key_off = op.key_offset.unwrap_or(0) as i32;
                 for n in &op.notes {
-                    if let Some(existing) = self.notes.get_mut(&n.id) {
-                        existing.tick += tick_off;
-                        existing.key = (existing.key as i32 + key_off).max(0) as u16;
+                    // 客户端发来的 n 是移动前的值；先按旧值定位并移除，再按新值插回。
+                    let old_key = NoteKey::from(n);
+                    if self.notes.remove(&old_key).is_some() {
+                        let mut moved = n.clone();
+                        moved.tick += tick_off;
+                        moved.key = (moved.key as i32 + key_off).max(0) as u16;
+                        self.notes.insert(NoteKey::from(&moved), moved);
                     }
                 }
             }
             NoteAction::Copy => { /* 纯客户端操作 */ }
             NoteAction::Paste => {
-                let tick_off = op.tick_offset.unwrap_or(0.0);
-                let key_off = op.key_offset.unwrap_or(0) as i32;
-                let target = op.target_track.unwrap_or(0);
-                for n in &mut op.notes {
-                    n.id = self.next_paste_id;
-                    self.next_paste_id = self.next_paste_id.wrapping_add(1);
-                    n.tick += tick_off;
-                    n.key = (n.key as i32 + key_off).max(0) as u16;
-                    n.track_index = target;
-                    self.notes.insert(n.id, n.clone());
+                // 客户端已按值算好目标位置（含偏移与 target_track），服务端直接按值插入。
+                for n in &op.notes {
+                    self.notes.insert(NoteKey::from(n), n.clone());
                 }
             }
         }

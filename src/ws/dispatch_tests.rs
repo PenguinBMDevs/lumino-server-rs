@@ -151,12 +151,14 @@ fn dispatch_auth_then_note_batch() {
     assert_eq!(v1["type"], "userJoined");
 
     // user2 发 noteBatch → user1 收到广播
-    let note_op = r#"{"type":"noteBatch","notes":{"action":"add","notes":[{"id":1,"tick":960,"key":60,"length":480,"velocity":100,"channel":0,"trackIndex":0}],"timestamp":1700000000000}}"#;
+    let note_op = r#"{"type":"noteBatch","notes":{"action":"add","notes":[{"tick":960,"key":60,"length":480,"velocity":100,"channel":0,"trackIndex":0}],"timestamp":1700000000000}}"#;
     dispatch(&state, &mut user2, 2, &None, &tx2, note_op);
     let msg1 = rx.try_recv().unwrap();
     let v1: Value = serde_json::from_str(&msg1).unwrap();
     assert_eq!(v1["type"], "noteBatchUpdate");
-    assert_eq!(v1["operation"]["notes"][0]["id"], 1);
+    assert_eq!(v1["operation"]["notes"][0]["tick"], 960.0);
+    assert_eq!(v1["operation"]["notes"][0]["key"], 60);
+    assert!(v1["operation"]["notes"][0]["id"].is_null());
     // user2 自己（排除发送者）不应收到
     assert!(rx2.try_recv().is_err());
 }
@@ -192,7 +194,7 @@ fn dispatch_full_sync() {
         1,
         &None,
         &tx,
-        r#"{"type":"noteBatch","notes":{"action":"add","notes":[{"id":1,"tick":0,"key":60,"length":480,"velocity":100,"channel":0,"trackIndex":0}],"timestamp":1}}"#,
+        r#"{"type":"noteBatch","notes":{"action":"add","notes":[{"tick":0,"key":60,"length":480,"velocity":100,"channel":0,"trackIndex":0}],"timestamp":1}}"#,
     );
     // requestSync
     dispatch(
